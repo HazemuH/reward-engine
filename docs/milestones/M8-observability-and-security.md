@@ -9,7 +9,7 @@ Can and should start as soon as there's anything to observe (don't wait for ever
 | RE-070 | Core metrics — `reward.calculate.duration`, `reward.reserve.result{ok,quota,dup,error}`, `reward.redemption.pending.age`, `reward.budget.used.ratio{campaign}`, `reward.recon.lag` | TODO | M2, M3 |
 | RE-071 | Structured logging — `requestId`/`redemptionId` on every line, no raw CIF ever (hashed or `customerRef` only) | TODO | M2 |
 | RE-072 | Rate limiting end to end — Redis-backed, documented fallback to per-instance limits when Redis is down (never a hard failure) | TODO | M2 (RE-016) |
-| RE-073 | Startup secret validation — app fails fast on any empty required secret (JWT key, DB password, encryption key), no default values anywhere | TODO | — |
+| RE-073 | Startup secret validation — app fails fast on any empty required secret (JWT key, DB password, encryption key), no default values anywhere | IN PROGRESS | DB credentials have no defaults since RE-094 and startup does fail without them — but with a misleading `'url' must start with "jdbc"`. Still needed: a clear "missing REWARD_DB_URL" style message, and the same for future secrets |
 | RE-074 | Bulkhead: separate thread/connection pools for `/internal` (transaction path) vs admin endpoints, so one can't starve the other | TODO | M7 |
 | RE-075 | Actuator lockdown — only `health`, `info`, `prometheus` exposed; Swagger off by default | TODO | — |
 | RE-076 | Load/concurrency/soak test pass against the targets in `docs/architecture/overview.md` (p95 < 50ms for `calculate`) once real traffic projections exist | TODO | M2, M3. Blocked on open-decisions.md #22 |

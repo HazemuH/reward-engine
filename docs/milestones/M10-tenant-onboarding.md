@@ -5,7 +5,7 @@
 | Ticket | Description | Status | Depends on |
 |---|---|---|---|
 | RE-090 | Tenant provisioning flow — create `tenant` + initial `client_application` + default config, scriptable (CLI or admin endpoint, either is fine) | TODO | M1 |
-| RE-091 | Per-tenant settings table replacing the `reward.*` keys in `application.yml` that are plausibly tenant-specific (`period-zone`, `quote-ttl-minutes`, rate limits) with DB-backed overrides, `application.yml` values becoming defaults only | TODO | RE-090, `[tenant-safety-check]` |
+| RE-091 | Per-tenant settings table replacing the `reward.*` keys in `application.yml` that are plausibly tenant-specific (`quote-ttl-minutes`, rate limits) with DB-backed overrides, `application.yml` values becoming defaults only. Time zone and currency already moved to the `tenant` row in RE-094 | TODO | RE-090, `[tenant-safety-check]` |
 | RE-092 | Verify end to end: spin up a second tenant locally, run a campaign through `calculate`→`reserve`→`confirm` without it ever touching tenant 1's rows, counters, or cache keys | TODO | RE-090, RE-091, M2, M3 |
 | RE-093 | Document the actual onboarding steps in this repo (`docs/`) once RE-090–092 land — this ticket is "write it down," not "build it" | TODO | RE-092 |
 

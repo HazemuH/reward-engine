@@ -11,7 +11,7 @@ The money-critical path. Every ticket here is `[money-safety-check]` — read th
 | RE-022 | `confirm` / `cancel` — `RESERVED → USED` / `RESERVED → RELEASED` (counter given back on cancel) | TODO | RE-021 |
 | RE-023 | `status` + `expire-reserve` scheduled job — `RESERVED → PENDING` handling for an unknown result or timeout from the payment side, polls until final instead of guessing | TODO | RE-022, M6 (ShedLock) |
 | RE-024 | `reverse` — full-refund-only path, `USED → REVERSED`, counter given back | TODO | RE-022 |
-| RE-025 | Concurrency test suite: two simulated callers racing the last unit of a counter, Testcontainers-backed (not H2) | TODO | RE-021 |
+| RE-025 | Concurrency test suite: two simulated callers racing the last unit of a counter, Testcontainers-backed (not H2) | TODO | RE-021. A first race on `consumeAllOrNothing` alone exists (`CounterRepositoryTest.concurrentCallersNeverExceedCap`); the full suite races `reserve` end to end |
 | RE-026 | `expire-quote` scheduled job — discard `QUOTED` rows past 15 minutes (no counter impact, nothing to release) | TODO | M2, M6 (ShedLock) |
 
 ## Exit criteria

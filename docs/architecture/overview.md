@@ -58,7 +58,8 @@ Granted **after** `confirm`, outside the payment transaction, via an outbox row 
 - `@Version` optimistic locking on `campaign`/`campaign_version` — concurrent admin edits get `409`, never a silent overwrite.
 - Every scheduled job wrapped in ShedLock (table-based) — see `shedlock` table in the baseline migration. Two instances must never run the same job twice.
 - Rule cache invalidation: Redis pub/sub is the fast path, a periodic read of an `epoch` column in Postgres is the fallback — Redis being down never lets two instances disagree about active rules for more than a few seconds.
-- Monthly/daily counter periods are computed from **server time in the tenant's configured zone** (`reward.period-zone`), never from a timestamp the caller sends.
+- Monthly/daily counter periods are computed from **server time in the tenant's configured zone** (`tenant.time_zone`), never from a timestamp the caller sends.
+- Counter limits are split in two: `counter_def` holds cap/unit/mode as approved in one campaign version (the single source of truth for the cap); `counter` holds usage per (campaign, name, scope key, period key) and carries it across versions. The consuming UPDATE takes the cap from the version being redeemed against and re-checks `campaign.status = ACTIVE` in the same statement, so a kill switch is effective immediately.
 
 ## What's intentionally not built yet
 
