@@ -36,7 +36,12 @@ docker compose up -d postgres redis            # Postgres on 5433, Redis on 6380
 
 ## Publishing to GitHub
 
-Remote: [HazemuH/reward-engine](https://github.com/HazemuH/reward-engine). Local `main` is the full repo, including `.claude/` and `CLAUDE.md`; those stay local/internal by request — only the project files go to GitHub. `./scripts/publish-to-origin.sh` regenerates a filtered history (same commits, those two paths stripped) and force-pushes it to `origin/main`. Run it from a clean `main` whenever you want to sync; don't push `main` directly to `origin` — their histories are meant to diverge on exactly those paths.
+Remote: [HazemuH/reward-engine](https://github.com/HazemuH/reward-engine). Two branches, two purposes:
+
+- **`main`** on GitHub — a standalone landing README describing the project. Not generated from this repo's local `main`; edit it directly on GitHub (or regenerate it by hand) if it needs updating.
+- **`feat/master`** on GitHub — the actual code, regenerated from this repo's local `main` by `./scripts/publish-to-origin.sh`.
+
+Local `main` is the full repo, including `.claude/` and `CLAUDE.md`; those stay local/internal by request — only the project files go to GitHub. The publish script strips those two paths out of a filtered history and force-pushes it to `origin/feat/master`. Run it from a clean `main` whenever you want to sync; don't push `main` directly to `origin` — nothing in local `main` should ever land on origin's `main`.
 
 ## Progress
 

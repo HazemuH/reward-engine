@@ -1,19 +1,26 @@
 #!/bin/bash
-# publish-to-origin.sh — push `main` to the GitHub remote with .claude/ and
-# CLAUDE.md stripped out of every commit.
+# publish-to-origin.sh — push local `main` to the GitHub remote's
+# `feat/master` branch, with .claude/ and CLAUDE.md stripped out of every
+# commit.
 #
-# Why: this repo's AI-workflow files (.claude/skills, CLAUDE.md) are meant to
-# stay local/internal, not published to the shared GitHub repo — only the
-# actual project files go there. Local `main` keeps everything; the remote's
-# `main` is a filtered view regenerated from it each time this runs.
+# Why feat/master and not main: origin's `main` is a static landing README
+# describing the project — the actual code lives on `feat/master`. Local
+# `main` is the full repo (code + AI-workflow files); this script is what
+# turns it into the filtered branch that gets published.
+#
+# Why filtered at all: this repo's AI-workflow files (.claude/skills,
+# CLAUDE.md) are meant to stay local/internal, not published — only the
+# actual project files go to GitHub.
 #
 # Usage: ./scripts/publish-to-origin.sh
 #
-# This force-pushes the regenerated history to origin's main. Safe as long as
-# origin's main is treated as a mirror (nobody commits to it directly) — if
-# that ever changes, this script needs to change too.
+# This force-pushes the regenerated history to origin's feat/master. Safe as
+# long as that branch is treated as a mirror (nobody commits to it directly
+# on GitHub) — if that ever changes, this script needs to change too.
 
 set -euo pipefail
+
+TARGET_BRANCH="feat/master"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -35,11 +42,11 @@ git filter-branch --force --prune-empty \
 	--index-filter 'git rm -r --cached --ignore-unmatch .claude CLAUDE.md' \
 	-- origin-publish
 
-echo "Pushing filtered history to origin/main (force) ..."
-git push --force origin origin-publish:main
+echo "Pushing filtered history to origin/$TARGET_BRANCH (force) ..."
+git push --force origin "origin-publish:$TARGET_BRANCH"
 
 git checkout main
 git branch -D origin-publish
 git for-each-ref --format="%(refname)" refs/original/ | xargs -r -n1 git update-ref -d
 
-echo "Done. origin/main now mirrors main, minus .claude/ and CLAUDE.md."
+echo "Done. origin/$TARGET_BRANCH now mirrors main, minus .claude/ and CLAUDE.md."
