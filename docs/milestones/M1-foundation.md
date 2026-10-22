@@ -13,6 +13,7 @@ Everything needed before any actual rule-evaluation or redemption logic could st
 | RE-005 | AI workflow — `CLAUDE.md` + `.claude/skills/` (`reward-mode`, `compress-context`, `rule-authoring`, `money-safety-check`, `tenant-safety-check`) | DONE | — |
 | RE-006 | `docker-compose.yml` for local Postgres + Redis | DONE | RabbitMQ deliberately left commented out — see M6 |
 | RE-007 | Verified `:common:compileJava :core:compileJava` actually builds | DONE | Needs `JAVA_HOME` ≤ JDK 23 to run Gradle itself; toolchain compiles on 21 — noted in `README.md` |
+| RE-008 | Vendored 18 general Java/Spring Boot skills from [decebals/claude-code-java](https://github.com/decebals/claude-code-java) (MIT) as the base for backend work, adapted `maven-dependency-audit` with a Gradle-equivalents note, wired them into `reward-mode`'s routing table | DONE | `.claude/skills/{git-commit,java-code-review,api-contract-review,concurrency-review,...}`, `.claude/skills/THIRD_PARTY_LICENSE-claude-code-java.txt` |
 
 ## What's explicitly not in M1
 

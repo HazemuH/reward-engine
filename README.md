@@ -44,7 +44,7 @@ Every domain table carries `tenant_id` from the baseline migration onward (`core
 
 ## Working on this with AI assistance
 
-This repo has a Claude Code workflow set up under `.claude/skills/`, inspired by [pstack](https://github.com/cursor/plugins/tree/main/pstack), scoped down to what this codebase actually needs and with an explicit token-budget discipline (`.claude/skills/compress-context`) so following the workflow doesn't mean burning context on every small change. Start with `/reward-mode` for anything non-trivial; see [`CLAUDE.md`](CLAUDE.md) for the full set of conventions and the skill list.
+This repo has a Claude Code workflow set up under `.claude/skills/`, inspired by [pstack](https://github.com/cursor/plugins/tree/main/pstack): a `reward-mode` entry point routing to 5 domain-specific playbooks (rule authoring, money-safety, tenant-safety) plus the 18 general Java/Spring Boot skills vendored from [decebals/claude-code-java](https://github.com/decebals/claude-code-java) (MIT) as the base for backend work — code review, architecture, JPA/Spring patterns, security, and more. An explicit token-budget skill (`.claude/skills/compress-context`) keeps following all of this from being expensive. Start with `/reward-mode` for anything non-trivial; see [`CLAUDE.md`](CLAUDE.md) for the full set of conventions and the skill list.
 
 ## Reference material
 
