@@ -1,39 +1,47 @@
 package com.rewardengine.common.tenant;
 
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+
 /**
- * Holds the current tenant for the duration of one request.
+ * The tenant the current unit of work runs as.
  *
- * This is the generalization of "channel" / client_application from the
- * original design: instead of one bank with many
- * channels, a SaaS deployment has many tenants, each with its own channels.
+ * Generalizes "channel" / client_application from the original design: one
+ * deployment serves many tenants, each with its own channels. Bound once per
+ * request (from the caller's API key, mTLS identity or admin JWT — never from
+ * a request body field) and read by Hibernate through
+ * {@link TenantIdentifierResolver}.
  *
- * Resolved once per request by a filter/interceptor (from the API key, mTLS
- * client identity, or admin JWT claim — never from a request body field),
- * then read by anything that scopes a query or a cache key. Nothing in core
- * should query campaign/counter/redemption tables without going through a
- * path that has this set first; see .claude/skills/tenant-safety-check.
+ * Backed by a ScopedValue rather than a ThreadLocal: the binding ends when the
+ * scope ends, so a forgotten clear() can't leak one tenant into the next
+ * request on a pooled thread.
  */
 public final class TenantContext {
 
-	private static final ThreadLocal<String> CURRENT = new ThreadLocal<>();
+	private static final ScopedValue<UUID> CURRENT = ScopedValue.newInstance();
 
 	private TenantContext() {
 	}
 
-	public static void set(String tenantId) {
-		CURRENT.set(tenantId);
+	public static <R, X extends Throwable> R callAs(UUID tenantId, ScopedValue.CallableOp<? extends R, X> op) throws X {
+		return ScopedValue.where(CURRENT, Objects.requireNonNull(tenantId, "tenantId")).call(op);
 	}
 
-	public static String get() {
-		String tenantId = CURRENT.get();
-		if (tenantId == null) {
+	public static void runAs(UUID tenantId, Runnable op) {
+		ScopedValue.where(CURRENT, Objects.requireNonNull(tenantId, "tenantId")).run(op);
+	}
+
+	/** The bound tenant; throws if nothing bound one — use at boundaries where a tenant is mandatory. */
+	public static UUID get() {
+		if (!CURRENT.isBound()) {
 			throw new IllegalStateException(
-					"TenantContext not set — resolve it from the request before touching tenant-scoped data");
+					"No tenant bound — wrap the call in TenantContext.callAs/runAs before touching tenant-scoped data");
 		}
-		return tenantId;
+		return CURRENT.get();
 	}
 
-	public static void clear() {
-		CURRENT.remove();
+	public static Optional<UUID> current() {
+		return CURRENT.isBound() ? Optional.of(CURRENT.get()) : Optional.empty();
 	}
 }

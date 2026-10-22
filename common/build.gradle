@@ -2,11 +2,9 @@ plugins {
 	id 'java-library'
 }
 
+// Deliberately thin: persistence primitives only, no web stack. ApiResponse
+// is a plain record and doesn't need Spring MVC on the classpath.
 dependencies {
-	implementation platform("org.springframework.boot:spring-boot-dependencies:${rootProject.ext.springBootVersion}")
-
-	api 'org.springframework.boot:spring-boot-starter-web'
-	api 'org.springframework.boot:spring-boot-starter-validation'
-	api 'org.springframework.boot:spring-boot-starter-data-jpa'
-	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+	api 'org.hibernate.orm:hibernate-core'
+	api 'org.springframework.data:spring-data-jpa'
 }

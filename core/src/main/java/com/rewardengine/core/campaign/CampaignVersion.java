@@ -1,26 +1,31 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.audit.TenantScopedEntity;
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
+import java.time.Instant;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
- * Immutable once APPROVED. conditions/benefits/counters are stored as JSON
- * (rawDefinition) per docs/architecture/overview.md section 03 — the engine
- * reads a validated snapshot, never a live-editable row. optionalScript is
- * the sandboxed Groovy source (50ms budget, no I/O; see
- * .claude/skills/money-safety-check for the checklist before changing
- * anything that touches script execution).
+ * One version of a campaign's rules. Content is frozen once it leaves DRAFT —
+ * a change is a new version, never an edit (architecture overview, "Rules are
+ * never overwritten"). Counter limits live in {@link com.rewardengine.core.counter.CounterDef}
+ * rows owned by this version.
  *
- * channels controls which client applications may use this version — see
- * ClientApplication#allowedChannels.
+ * approvedBy/approvedAt are required from APPROVED onward (DB check constraint),
+ * and the approver must differ from the author (enforced in the approval service).
  */
 @Getter
 @Setter
@@ -28,22 +33,31 @@ import lombok.Setter;
 @Table(name = "campaign_version")
 public class CampaignVersion extends TenantScopedEntity {
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private UUID campaignId;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private int versionNumber;
 
-	@Lob
+	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
-	private String rawDefinition; // JSON: conditions, benefits, counters, vars, content (id/en)
+	private CampaignVersionStatus status = CampaignVersionStatus.DRAFT;
 
-	@Lob
-	private String optionalScript; // sandboxed Groovy source, or null
+	/** conditions, benefits, vars, content (id/en) — validated against a schema before submit. */
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(nullable = false)
+	private String rawDefinition;
+
+	/** Optional rule script source; null for data-only rules (most of them). */
+	@Column(columnDefinition = "text")
+	private String optionalScript;
 
 	@ElementCollection
-	private Set<String> channels;
+	@CollectionTable(name = "campaign_version_channel", joinColumns = @JoinColumn(name = "campaign_version_id"))
+	@Column(name = "channel", nullable = false)
+	private Set<String> channels = new HashSet<>();
 
-	@Column(nullable = false)
 	private String approvedBy;
+
+	private Instant approvedAt;
 }

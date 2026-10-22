@@ -2,9 +2,11 @@ spring:
   application:
     name: reward-core
   datasource:
-    url: jdbc:postgresql://localhost:5433/reward
-    username: reward
-    password: reward
+    # No defaults: the app must fail to start rather than run on a guessed credential.
+    # Local values live in application-local.yml.
+    url: ${REWARD_DB_URL}
+    username: ${REWARD_DB_USERNAME}
+    password: ${REWARD_DB_PASSWORD}
   jpa:
     open-in-view: false
     hibernate:
@@ -14,12 +16,11 @@ spring:
         jdbc:
           time_zone: UTC
   flyway:
-    enabled: true
     locations: classpath:db/migration
   data:
     redis:
-      host: localhost
-      port: 6380
+      host: ${REWARD_REDIS_HOST:localhost}
+      port: ${REWARD_REDIS_PORT:6379}
 
 server:
   port: 8081
@@ -34,11 +35,10 @@ management:
       probes:
         enabled: true
 
-# Reward-engine specific settings. Anything a tenant can plausibly want to
-# override belongs under here, not hardcoded in Java — this is what keeps
-# the base adjustable per deployment instead of forked per client.
+# Engine-wide defaults. Per-tenant values (time zone for counter periods,
+# currency) live on the tenant row; anything else a tenant may want to
+# override belongs here rather than hardcoded in Java.
 reward:
-  period-zone: UTC # overridden per deployment, e.g. Asia/Jakarta for an Indonesian tenant
   quote-ttl-minutes: 15
   calculate-rate-limit-per-minute: 10
 

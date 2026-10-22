@@ -1,28 +1,21 @@
 package com.rewardengine.core.tenant;
 
+import com.rewardengine.common.audit.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import java.time.Instant;
 import lombok.Getter;
 import lombok.Setter;
 
 /**
- * One tenant = one deployment customer (one bank, one issuer, ...). Not part
- * of TenantScopedEntity's own hierarchy — this is the row that tenantId
- * elsewhere points *at*. Everything else in core hangs off {@link #id}.
+ * One tenant = one deployment customer (one bank, one issuer, ...). Global, not
+ * tenant-scoped: this is the row every other table's tenant_id points at.
  */
 @Getter
 @Setter
 @Entity
 @Table(name = "tenant")
-public class Tenant {
-
-	@Id
-	@GeneratedValue
-	private java.util.UUID id;
+public class Tenant extends BaseEntity {
 
 	@Column(nullable = false, unique = true)
 	private String code;
@@ -30,13 +23,14 @@ public class Tenant {
 	@Column(nullable = false)
 	private String name;
 
-	/** IANA zone used for counter periods (DAY/WEEK/MONTH) — see application.yml reward.period-zone default. */
+	/** IANA zone for counter periods (DAY/WEEK/MONTH); periods are computed from server time in this zone. */
 	@Column(nullable = false)
 	private String timeZone;
 
+	/** ISO 4217 code for every MONEY-unit counter and money benefit of this tenant. */
+	@Column(nullable = false, length = 3)
+	private String currency;
+
 	@Column(nullable = false)
 	private boolean active = true;
-
-	@Column(nullable = false, updatable = false)
-	private Instant createdAt = Instant.now();
 }

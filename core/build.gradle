@@ -1,6 +1,5 @@
 plugins {
-	id 'org.springframework.boot' version '3.4.3'
-	id 'org.flywaydb.flyway' version '10.20.1'
+	alias(libs.plugins.spring.boot)
 }
 
 springBoot {
@@ -10,32 +9,27 @@ springBoot {
 dependencies {
 	implementation project(':common')
 
-	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
-	implementation 'org.springframework.boot:spring-boot-starter-aop'
-
-	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	implementation 'org.flywaydb:flyway-database-postgresql'
+
+	// ShedLock: two instances must not run the same scheduled job twice (architecture overview, "Two instances, one truth").
+	implementation libs.shedlock.spring
+	implementation libs.shedlock.jdbc
+
 	runtimeOnly 'org.postgresql:postgresql'
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
-	// Rule scripting: Groovy sandbox, per docs/architecture/overview.md section 03.
-	implementation 'org.apache.groovy:groovy:4.0.24'
-
-	// ShedLock: two instances must not run the same scheduled job twice (section 09).
-	implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
-	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
-
-	testImplementation 'org.springframework.boot:spring-boot-starter-test'
-	testImplementation 'org.testcontainers:postgresql:1.20.4'
-	testImplementation 'org.testcontainers:junit-jupiter:1.20.4'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
 }
 
-flyway {
-	url = 'jdbc:postgresql://localhost:5433/reward'
-	user = 'reward'
-	password = 'reward'
-	locations = ['classpath:db/migration']
+// Local runs use the `local` profile (credentials for docker-compose) unless overridden.
+tasks.named('bootRun') {
+	systemProperty 'spring.profiles.active', System.getProperty('spring.profiles.active', 'local')
 }

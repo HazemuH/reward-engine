@@ -1,3 +1,13 @@
+# Local development against docker-compose.yml. Never used outside a laptop.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/reward
+    username: reward
+    password: reward
+  data:
+    redis:
+      port: 6380
+
 logging:
   level:
     com.rewardengine: DEBUG

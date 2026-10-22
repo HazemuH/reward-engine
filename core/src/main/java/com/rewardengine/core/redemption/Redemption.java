@@ -11,9 +11,12 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * One row per attempt to use a code/promo on one transaction. ruleVersionId
- * pins the exact CampaignVersion that was evaluated, so a later change to
- * the campaign never changes the outcome of a past redemption.
+ * One attempt to use a promo on one transaction. ruleVersionId pins the exact
+ * CampaignVersion that was evaluated, so a later change to the campaign never
+ * changes the outcome of a past redemption.
+ *
+ * requestId is unique per tenant, not globally — two tenants' callers may
+ * legitimately reuse the same id.
  */
 @Getter
 @Setter
@@ -21,19 +24,19 @@ import lombok.Setter;
 @Table(name = "redemption")
 public class Redemption extends TenantScopedEntity {
 
-	@Column(nullable = false, unique = true)
+	@Column(nullable = false, updatable = false)
 	private String requestId;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private UUID campaignId;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private UUID ruleVersionId;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private String userKey;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private String transactionRef;
 
 	@Enumerated(EnumType.STRING)

@@ -3,59 +3,44 @@ package com.rewardengine.core.counter;
 import com.rewardengine.common.audit.TenantScopedEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.util.UUID;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 
 /**
- * The only table `used` is allowed to move on — and only through the atomic
- * UPDATE statements in the redemption service (reserve/confirm/cancel), never
- * a read-then-write from application code or a script. See
- * docs/architecture/overview.md section 09 for the exact SQL shape and
- * .claude/skills/money-safety-check before touching this class or its
- * repository.
+ * Usage of one limit, per (campaign, name, scope key, period key). The cap is
+ * not stored here — it comes from the {@link CounterDef} of the version being
+ * redeemed against.
+ *
+ * `used` is read-only to JPA (insertable/updatable = false, no setter): the
+ * only writer is the conditional UPDATE in {@link CounterRepository}, which
+ * also bumps @Version. A stale Counter entity saved later therefore fails its
+ * version check instead of writing an old `used` back.
+ * Read .claude/skills/money-safety-check before changing any of this.
  */
 @Getter
 @Setter
 @Entity
-@Table(
-		name = "counter",
-		uniqueConstraints = @UniqueConstraint(columnNames = {"campaign_id", "name", "scope_key", "period_key"}))
+@Table(name = "counter")
 public class Counter extends TenantScopedEntity {
 
-	@Column(name = "campaign_id", nullable = false)
+	@Column(nullable = false, updatable = false)
 	private UUID campaignId;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private String name;
 
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false)
-	private CounterScope scope;
-
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false)
-	private CounterUnit unit;
-
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false)
-	private CounterMode mode;
-
 	/** "" for CAMPAIGN scope, userKey for USER scope, merchantId for MERCHANT scope. */
-	@Column(name = "scope_key", nullable = false)
+	@Column(nullable = false, updatable = false)
 	private String scopeKey = "";
 
-	/** "" for no period (whole-campaign cap), otherwise e.g. "2026-10" for MONTH. */
-	@Column(name = "period_key", nullable = false)
+	/** "" for a whole-campaign period, otherwise e.g. "2026-10" for MONTH. */
+	@Column(nullable = false, updatable = false)
 	private String periodKey = "";
 
-	@Column(nullable = false)
-	private long cap;
-
-	@Column(nullable = false)
-	private long used = 0;
+	@Setter(AccessLevel.NONE)
+	@Column(nullable = false, insertable = false, updatable = false)
+	private long used;
 }
