@@ -34,6 +34,10 @@ docker compose up -d postgres redis            # Postgres on 5433, Redis on 6380
 
 `core` listens on `:8081`. Health/info/Prometheus are the only exposed actuator endpoints (`management.endpoints.web.exposure.include` in `core/src/main/resources/application.yml`).
 
+## Progress
+
+Ticket-style milestones (no timeline, just status per ticket) live in [`docs/milestones/`](docs/milestones/README.md) — start there for what's actually done vs. still open.
+
 ## Tenancy
 
 Every domain table carries `tenant_id` from the baseline migration onward (`core/src/main/resources/db/migration/V1__baseline.sql`). `TenantContext` (in `common`) must be resolved from the authenticated caller before any tenant-scoped query runs — see `.claude/skills/tenant-safety-check` for the checklist when adding new tenant-owned data.
