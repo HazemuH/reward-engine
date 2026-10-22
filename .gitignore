@@ -1,0 +1,25 @@
+.DS_Store
+*.log
+
+# Gradle
+.gradle/
+build/
+bin/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.cursorignore
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Node (admin portal, future)
+node_modules/
+dist/
+

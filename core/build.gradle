@@ -1,0 +1,41 @@
+plugins {
+	id 'org.springframework.boot' version '3.4.3'
+	id 'org.flywaydb.flyway' version '10.20.1'
+}
+
+springBoot {
+	mainClass = 'com.rewardengine.core.RewardCoreApplication'
+}
+
+dependencies {
+	implementation project(':common')
+
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-aop'
+
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	runtimeOnly 'org.postgresql:postgresql'
+
+	// Rule scripting: Groovy sandbox, per docs/architecture/overview.md section 03.
+	implementation 'org.apache.groovy:groovy:4.0.24'
+
+	// ShedLock: two instances must not run the same scheduled job twice (section 09).
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.testcontainers:postgresql:1.20.4'
+	testImplementation 'org.testcontainers:junit-jupiter:1.20.4'
+}
+
+flyway {
+	url = 'jdbc:postgresql://localhost:5433/reward'
+	user = 'reward'
+	password = 'reward'
+	locations = ['classpath:db/migration']
+}

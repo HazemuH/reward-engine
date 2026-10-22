@@ -1,0 +1,4 @@
+logging:
+  level:
+    com.rewardengine: DEBUG
+    org.hibernate.SQL: DEBUG

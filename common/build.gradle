@@ -1,0 +1,12 @@
+plugins {
+	id 'java-library'
+}
+
+dependencies {
+	implementation platform("org.springframework.boot:spring-boot-dependencies:${rootProject.ext.springBootVersion}")
+
+	api 'org.springframework.boot:spring-boot-starter-web'
+	api 'org.springframework.boot:spring-boot-starter-validation'
+	api 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+}

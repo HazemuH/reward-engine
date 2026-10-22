@@ -1,0 +1,52 @@
+plugins {
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+ext {
+	springBootVersion = '3.4.3'
+	javaVersion = 21
+	flywayVersion = '10.20.1'
+}
+
+allprojects {
+	group = 'com.rewardengine'
+	version = '0.1.0-SNAPSHOT'
+
+	apply plugin: 'io.spring.dependency-management'
+	dependencyManagement {
+		imports {
+			mavenBom "org.springframework.boot:spring-boot-dependencies:${springBootVersion}"
+		}
+		dependencies {
+			dependency "org.flywaydb:flyway-core:${flywayVersion}"
+			dependency "org.flywaydb:flyway-database-postgresql:${flywayVersion}"
+		}
+	}
+}
+
+subprojects {
+	apply plugin: 'java'
+
+	java {
+		toolchain {
+			languageVersion = JavaLanguageVersion.of(javaVersion)
+		}
+	}
+
+	compileJava {
+		options.encoding = 'UTF-8'
+		options.compilerArgs << '-parameters'
+	}
+
+	tasks.withType(Test) {
+		useJUnitPlatform()
+	}
+
+	dependencies {
+		compileOnly 'org.projectlombok:lombok'
+		annotationProcessor 'org.projectlombok:lombok'
+		testCompileOnly 'org.projectlombok:lombok'
+		testAnnotationProcessor 'org.projectlombok:lombok'
+		testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	}
+}

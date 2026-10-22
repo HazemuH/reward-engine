@@ -1,0 +1,24 @@
+pluginManagement {
+	repositories {
+		mavenCentral()
+		gradlePluginPortal()
+	}
+}
+
+plugins {
+	id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+}
+
+dependencyResolutionManagement {
+	repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+	repositories {
+		mavenCentral()
+		gradlePluginPortal()
+	}
+}
+
+rootProject.name = 'reward-engine'
+
+// 'gateway' (admin login: LDAP + local, JWT, RBAC) is intentionally not included yet.
+// See docs/decisions/open-decisions.md #2 and CLAUDE.md "Current phase" before adding it.
+include 'common', 'core'

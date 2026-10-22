@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: reward
+      POSTGRES_USER: reward
+      POSTGRES_PASSWORD: reward
+    ports:
+      - "5433:5432"
+    volumes:
+      - reward-postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379"
+
+  # RabbitMQ is optional (phase 2 — see docs/architecture/overview.md #16).
+  # Uncomment when outbox-relay needs a real broker instead of the DB-only outbox.
+  # rabbitmq:
+  #   image: rabbitmq:3.13-management
+  #   ports:
+  #     - "5672:5672"
+  #     - "15672:15672"
+
+volumes:
+  reward-postgres-data:
