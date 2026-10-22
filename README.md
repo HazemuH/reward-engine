@@ -34,6 +34,10 @@ docker compose up -d postgres redis            # Postgres on 5433, Redis on 6380
 
 `core` listens on `:8081`. Health/info/Prometheus are the only exposed actuator endpoints (`management.endpoints.web.exposure.include` in `core/src/main/resources/application.yml`).
 
+## Publishing to GitHub
+
+Remote: [HazemuH/reward-engine](https://github.com/HazemuH/reward-engine). Local `main` is the full repo, including `.claude/` and `CLAUDE.md`; those stay local/internal by request — only the project files go to GitHub. `./scripts/publish-to-origin.sh` regenerates a filtered history (same commits, those two paths stripped) and force-pushes it to `origin/main`. Run it from a clean `main` whenever you want to sync; don't push `main` directly to `origin` — their histories are meant to diverge on exactly those paths.
+
 ## Progress
 
 Ticket-style milestones (no timeline, just status per ticket) live in [`docs/milestones/`](docs/milestones/README.md) — start there for what's actually done vs. still open.
