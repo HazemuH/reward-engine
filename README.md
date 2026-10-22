@@ -1,6 +1,6 @@
 # Reward Engine
 
-A rule engine for promo codes and referral rewards — campaigns, quota/budget counters, and redemption lifecycle, decoupled from payment. Originally scoped for the tenant's mobile app, built as a **multi-tenant SaaS base** so a new deployment is configuration, not a fork.
+A rule engine for promo codes and referral rewards — campaigns, quota/budget counters, and redemption lifecycle, decoupled from payment. Personal project: a **multi-tenant SaaS base** generalized from real-world banking reward-system requirements, so a new deployment is configuration, not a fork — meant to be the starting scaffold for future client engagements rather than rebuilt each time.
 
 Read [`docs/architecture/overview.md`](docs/architecture/overview.md) before touching `core/`. It's short, and the six principles in it are the difference between a correct change and a dangerous one.
 

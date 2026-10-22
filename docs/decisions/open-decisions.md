@@ -16,12 +16,12 @@ Questions every deployment of this engine has to answer, plus the decisions alre
 | 10 | Business policy settings (who absorbs the discount, refund scope, etc.) | Open | Expose as Admin Panel settings so it's not a code change later | tenant |
 | 11 | How points/cashback actually get credited (real-time API vs. daily batch) | Open — **blocks fulfillment worker implementation** | Until answered, entitlements can be recorded/reported but not granted | tenant |
 | 12 | Point-to-currency conversion for budget math | Open | One config value, or a separate POINT-unit budget | tenant |
-| 13 | Source of customer attribute snapshot data (demographics, branch, tenure) | Open | File or API from tenant; need load schedule + data owner | tenant |
-| 14 | Sensitive-attribute targeting policy | Open | Confirm with tenant's data protection policy owner | tenant |
+| 13 | Source of customer attribute snapshot data (demographics, branch, tenure) | Open | File or API from the tenant; need load schedule + data owner | tenant |
+| 14 | Sensitive-attribute targeting policy | Open | Confirm with the tenant's data protection policy owner | tenant |
 | 15 | Partial budget on last transaction | Resolved for this base | Reject whole (`QUOTA_EXHAUSTED`); PARTIAL mode only applies to deferred benefits | Team |
 | 16 | Monthly period boundary: server time or request time | Resolved for this base | Server time, tenant-configured zone (`reward.period-zone`) | Team |
 | 17 | AI-assisted script generation | Deferred | Only if rule descriptions are allowed to leave the tenant's network | tenant |
-| 18 | Other apps beyond the tenant's mobile app using this engine | Partially resolved — this is why the base is multi-tenant | Stage 1 is one tenant/one channel; foundation (tenant, channel, client credential) already generalized | tenant |
+| 18 | Other apps beyond the pilot tenant's app using this engine | Partially resolved — this is why the base is multi-tenant | Stage 1 is one tenant/one channel; foundation (tenant, channel, client credential) already generalized | tenant |
 | 19 | Referral cross-app vs. origin-app only | Open | Stage 1: origin app only | tenant |
 | 20 | Clawback policy when a qualifying transaction is later cancelled | Open | Only if the points system supports reversal; otherwise record + report | tenant |
 | 21 | Referral code format: structured or random | Open | Random without personal data is safer; a structured format is a product choice the tenant makes | tenant |

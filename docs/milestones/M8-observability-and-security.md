@@ -12,7 +12,7 @@ Can and should start as soon as there's anything to observe (don't wait for ever
 | RE-073 | Startup secret validation — app fails fast on any empty required secret (JWT key, DB password, encryption key), no default values anywhere | TODO | — |
 | RE-074 | Bulkhead: separate thread/connection pools for `/internal` (transaction path) vs admin endpoints, so one can't starve the other | TODO | M7 |
 | RE-075 | Actuator lockdown — only `health`, `info`, `prometheus` exposed; Swagger off by default | TODO | — |
-| RE-076 | Load/concurrency/soak test pass against the targets in `docs/architecture/overview.md` (p95 < 50ms for `calculate`) once tenant traffic projections exist | TODO | M2, M3. Blocked on open-decisions.md #22 |
+| RE-076 | Load/concurrency/soak test pass against the targets in `docs/architecture/overview.md` (p95 < 50ms for `calculate`) once real traffic projections exist | TODO | M2, M3. Blocked on open-decisions.md #22 |
 
 ## Exit criteria
 

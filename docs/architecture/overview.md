@@ -2,7 +2,7 @@
 
 ## What this is
 
-A rule engine for promo codes and referral rewards, originally scoped for the tenant's mobile app, built here as a **reusable SaaS base**: the domain model (campaign → version → conditions/benefits/counters/script) and the tenant boundary are generic from day one, so a second deployment is a config change, not a fork. See `docs/decisions/` for what's still bank-specific and what's already generalized.
+A rule engine for promo codes and referral rewards, generalized from real-world banking promo/referral requirements into a **reusable SaaS base**: the domain model (campaign → version → conditions/benefits/counters/script) and the tenant boundary are generic from day one, so a second deployment is a config change, not a fork. See `docs/decisions/` for what's still deployment-specific and what's already generalized.
 
 ## Six principles (non-negotiable)
 
@@ -64,7 +64,7 @@ Granted **after** `confirm`, outside the payment transaction, via an outbox row 
 
 - `reward-gateway` / LDAP / JWT admin auth — see `docs/decisions/open-decisions.md` #2.
 - RabbitMQ wiring — outbox table exists, the relay job and broker don't yet.
-- Multiple campaigns-per-transaction resolution, referral fraud review UI, points/cashback crediting integration — all gated on open tenant decisions, tracked in `docs/decisions/open-decisions.md`.
+- Multiple campaigns-per-transaction resolution, referral fraud review UI, points/cashback crediting integration — all gated on open deployment decisions, tracked in `docs/decisions/open-decisions.md`.
 
 ## Full API / data model reference
 

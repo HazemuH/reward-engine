@@ -38,7 +38,7 @@ management:
 # override belongs under here, not hardcoded in Java — this is what keeps
 # the base adjustable per deployment instead of forked per client.
 reward:
-  period-zone: UTC # overridden per deployment, e.g. Asia/Jakarta for tenant
+  period-zone: UTC # overridden per deployment, e.g. Asia/Jakarta for an Indonesian tenant
   quote-ttl-minutes: 15
   calculate-rate-limit-per-minute: 10
 
