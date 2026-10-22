@@ -1,12 +1,12 @@
 package com.rewardengine.common.error;
 
 /**
- * Thrown for any rejection that has a business error code (QUOTA_EXHAUSTED, QUOTE_EXPIRED, ...).
- * The code is kept separate from the HTTP status: the web layer maps it,
- * callers (the caller) switch on the code, not the status text.
+ * Thrown for any rejection that has a business error code (QUOTA_EXHAUSTED,
+ * QUOTE_EXPIRED, ...). The code is kept separate from the HTTP status: the web
+ * layer maps it, callers switch on the code, not the status text.
  *
- * See docs/architecture/overview.md section 15 for the code table — keep
- * tenant-specific code tables out of this class; this stays generic.
+ * The code table lives in docs/architecture/overview.md ("Business error
+ * codes") — keep tenant-specific code tables out of this class; this stays generic.
  */
 public class BusinessRuleException extends RuntimeException {
 

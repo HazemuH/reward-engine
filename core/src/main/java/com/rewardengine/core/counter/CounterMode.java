@@ -6,7 +6,7 @@ package com.rewardengine.core.counter;
  * rejected whole (QUOTA_EXHAUSTED).
  * PARTIAL: only for deferred benefits (points/cashback) — takes whatever is
  * left, down to zero. Counter order matters when several PARTIAL counters
- * chain (see docs/architecture/overview.md section 03).
+ * chain (CounterDef#sortOrder).
  */
 public enum CounterMode {
 	ALL_OR_NOTHING,

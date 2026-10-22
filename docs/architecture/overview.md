@@ -1,5 +1,7 @@
 # Architecture overview
 
+The architecture reference for the engine, for day-to-day engineering work. Decisions that change it are recorded in `docs/decisions/open-decisions.md`; update this file in the same change.
+
 ## What this is
 
 A rule engine for promo codes and referral rewards, generalized from real-world banking promo/referral requirements into a **reusable SaaS base**: the domain model (campaign → version → conditions/benefits/counters/script) and the tenant boundary are generic from day one, so a second deployment is a config change, not a fork. See `docs/decisions/` for what's still deployment-specific and what's already generalized.
@@ -10,8 +12,8 @@ A rule engine for promo codes and referral rewards, generalized from real-world 
 2. **Reads may fail open; writes may not fail closed silently.** Listing/calculating a promo degrading to "no promo" is fine. A reserve must never slip through without locking a counter.
 3. **Every write is idempotent.** Every request carries a `requestId`; a retry from the caller returns the same stored result (`idempotency_key` table).
 4. **Rules are never overwritten.** Every campaign change creates a new version. A redemption stores exactly which version it used.
-5. **Script decides, the engine enforces.** A Groovy script may propose a `Decision` (benefits, consumes). Only the engine touches counters, reverses them on failure, and rejects any decision that exceeds the campaign's defined limits.
-6. **Reward going down must never take payment down with it.** Core banking debit does not depend on the reward engine being up.
+5. **Script decides, the engine enforces.** A rule script may propose a `Decision` (benefits, consumes). Only the engine touches counters, reverses them on failure, and rejects any decision that exceeds the campaign's defined limits.
+6. **Reward going down must never take payment down with it.** The payment debit does not depend on the reward engine being up.
 
 ## Components
 
@@ -23,18 +25,19 @@ A rule engine for promo codes and referral rewards, generalized from real-world 
 | Redis | Rate limiting, active-rule cache, JWT blacklist — all optional, all fail-open | Disposable |
 | RabbitMQ (phase 2, optional) | Notification/report events via an outbox table, not a requirement for correctness | Durable, but core never blocks on it |
 
-`gateway` is deliberately absent from `settings.gradle` right now — see `docs/decisions/open-decisions.md` before adding it back. The transaction path (the caller → core) never goes through a gateway in any option on the table; only the human admin path does.
+`gateway` is deliberately absent from `settings.gradle` right now — see `docs/decisions/open-decisions.md` before adding it back. The transaction path (the caller's payment flow → core) never goes through a gateway; only the human admin path does.
 
 ## Rule model
 
-One `CampaignVersion` = `conditions` (from an attribute catalog) + `benefits` + `counters` + `vars` + an optional sandboxed Groovy `script` + bilingual `content`. Most rules need no script at all.
+One `CampaignVersion` = `conditions` (from an attribute catalog) + `benefits` + `counters` + `vars` + an optional `script` + bilingual `content`. Most rules need no script at all; a script is only for a calculation the condition/benefit/counter vocabulary can't express.
 
-Script contract (enforced by structure, not convention):
+Script contract (enforced by structure, not convention — design in `docs/milestones/M4-script-sandbox.md`):
+- Language: Groovy, compiled with static type checking at save time. Every method call and property access must be on an explicit allowlist; anything else fails compilation. Annotations, imports outside the allowlist, class/method declarations and global AST transformations are rejected, so nothing runs at compile time either.
 - Input: `facts` (request + customer snapshot, read-only), `vars`, `ref` (read-only reference lists).
 - Output: one `Decision` — eligible?, `benefits`, `consumes`. Validated against the campaign's own declared benefit types and counter names.
-- Forbidden: any write, any I/O, reflection, threads, wall-clock reads (use `facts.now`), anything outside an explicit allow-list of imports.
-- Budget: 50ms execution, capped memory, static-compiled at save time, separate classloader.
-- On exception or timeout: not eligible, no benefit — ever. Never "treat as a new customer and grant anyway" (that was the old system's bug).
+- Forbidden: any write, any I/O, reflection, threads, wall-clock reads (use `facts.now`).
+- Budget: 50ms, enforced by interrupt checks the compiler injects into every loop and method entry; separate classloader that exposes only the allowlisted API.
+- On exception or timeout: not eligible, no benefit — ever. Never "treat as a new customer and grant anyway".
 
 ## Redemption lifecycle
 
@@ -61,12 +64,27 @@ Granted **after** `confirm`, outside the payment transaction, via an outbox row 
 - Monthly/daily counter periods are computed from **server time in the tenant's configured zone** (`tenant.time_zone`), never from a timestamp the caller sends.
 - Counter limits are split in two: `counter_def` holds cap/unit/mode as approved in one campaign version (the single source of truth for the cap); `counter` holds usage per (campaign, name, scope key, period key) and carries it across versions. The consuming UPDATE takes the cap from the version being redeemed against and re-checks `campaign.status = ACTIVE` in the same statement, so a kill switch is effective immediately.
 
+## Business error codes
+
+Rejections carry a descriptive code; callers switch on the code, not on HTTP status text.
+
+| Code | Meaning |
+|---|---|
+| `PROMO_NOT_FOUND` | Code doesn't exist, was revoked, or isn't valid for this channel |
+| `PROMO_NOT_ACTIVE` | Campaign isn't currently ACTIVE (not started, paused, ended, stopped) |
+| `PROMO_NOT_ELIGIBLE` | Conditions don't match this customer/transaction |
+| `MIN_AMOUNT_NOT_MET` | Transaction amount below the campaign minimum (`params.minimum`) |
+| `QUOTA_EXHAUSTED` | A quota, budget or per-user counter has no room left |
+| `AUTO_PROMO_ATTACHED` | An automatic promo is already attached to this transaction |
+| `QUOTE_EXPIRED` | Quote older than its TTL, or the transaction changed since it was quoted |
+| `RATE_LIMITED` | Too many attempts in the rate-limit window |
+
 ## What's intentionally not built yet
 
 - `reward-gateway` / LDAP / JWT admin auth — see `docs/decisions/open-decisions.md` #2.
 - RabbitMQ wiring — outbox table exists, the relay job and broker don't yet.
-- Multiple campaigns-per-transaction resolution, referral fraud review UI, points/cashback crediting integration — all gated on open deployment decisions, tracked in `docs/decisions/open-decisions.md`.
+- Multiple campaigns-per-transaction resolution, referral fraud review UI, points/cashback crediting integration — all gated on open deployment decisions tracked in `docs/decisions/open-decisions.md`.
 
-## Full API / data model reference
+## API surface
 
-The complete endpoint table (`/internal/reward/v1/*`, `/api/v1/reward/**`), business error codes, and the full table-by-table data model are documented in docs/architecture/overview.md as they're built. Keep new entities/endpoints consistent with those unless a decision in `docs/decisions/` explicitly changes them.
+Transaction endpoints live under `/internal/reward/v1/*` (machine callers, API key or mTLS); admin endpoints under `/api/v1/reward/**` (behind the gateway). Contracts are documented here as each endpoint is built (M2, M3, M7).

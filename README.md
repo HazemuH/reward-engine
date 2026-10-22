@@ -19,7 +19,7 @@ core/     reward-core — the engine: campaign, counter, redemption, (referral/c
 
 ## Tech stack
 
-Java 25, Spring Boot 4.1, Gradle 9 (multi-module, versions in `gradle/libs.versions.toml`), PostgreSQL 16 + Flyway, Redis 7, ShedLock. The rule-script runtime (Groovy vs. CEL) is still an open decision — see `docs/decisions/open-decisions.md` #24.
+Java 25, Spring Boot 4.1, Gradle 9 (multi-module, versions in `gradle/libs.versions.toml`), PostgreSQL 16 + Flyway, Redis 7, ShedLock. Rule scripts will be Groovy, hardened against RCE (`docs/milestones/M4-script-sandbox.md`), added back as a dependency when M4 starts.
 
 ## Running locally
 
@@ -60,6 +60,3 @@ Every tenant-owned table carries `tenant_id` from the baseline migration onward 
 ## Working on this with AI assistance
 
 This repo has a Claude Code workflow set up under `.claude/skills/`, inspired by [pstack](https://github.com/cursor/plugins/tree/main/pstack): a `reward-mode` entry point routing to 5 domain-specific playbooks (rule authoring, money-safety, tenant-safety) plus 12 general Java/Spring Boot skills vendored from [decebals/claude-code-java](https://github.com/decebals/claude-code-java) (MIT) as the base for backend work — code review, architecture, JPA/Spring patterns, security, and more. An explicit token-budget skill (`.claude/skills/compress-context`) keeps following all of this from being expensive. Start with `/reward-mode` for anything non-trivial; see [`CLAUDE.md`](CLAUDE.md) for the full set of conventions and the skill list.
-
-## Reference material
-

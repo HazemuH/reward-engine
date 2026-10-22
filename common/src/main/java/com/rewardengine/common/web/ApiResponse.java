@@ -6,7 +6,7 @@ import java.time.Instant;
  * Standard envelope for every admin-facing response.
  * Internal transaction endpoints (calculate/reserve/confirm/...) do NOT use this
  * envelope — they return the raw contract shape documented in
- * docs/architecture/overview.md so the caller clients don't unwrap anything extra.
+ * docs/architecture/overview.md so machine callers don't unwrap anything extra.
  */
 public record ApiResponse<T>(boolean success, T data, ApiError error, Instant timestamp) {
 

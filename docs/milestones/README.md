@@ -17,7 +17,7 @@ Ticket-style progress tracking for this project. No dates, no timeline — each 
 | [M1](M1-foundation.md) | Foundation & SaaS base | **DONE** |
 | [M2](M2-rule-engine-core.md) | Rule engine core (campaign, conditions, calculate) | TODO |
 | [M3](M3-redemption-lifecycle.md) | Redemption lifecycle (reserve/confirm/cancel, counters) | TODO |
-| [M4](M4-script-sandbox.md) | Groovy script sandbox | TODO |
+| [M4](M4-script-sandbox.md) | Groovy script sandbox (hardened against RCE) | TODO |
 | [M5](M5-referral.md) | Referral module | TODO |
 | [M6](M6-fulfillment-and-jobs.md) | Fulfillment worker & scheduled jobs | TODO |
 | [M7](M7-admin-api.md) | Admin API (campaign mgmt, approvals, reports) | TODO |
