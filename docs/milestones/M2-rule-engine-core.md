@@ -6,7 +6,7 @@ Gets `calculate` returning a real quote from a real campaign version. No writes 
 
 | Ticket | Description | Status | Depends on |
 |---|---|---|---|
-| RE-010 | Campaign CRUD service + `DRAFT` lifecycle (model only, no approval API — that's M7) | TODO | M1 |
+| RE-010 | Campaign CRUD service + `DRAFT` lifecycle (model only, no approval API — that's M7) | DONE — `CampaignService` (create/list/get/rename/openDraft/editDraft, expected-version `409`), content writable only via `CampaignVersion.editDraft` while DRAFT (DB trigger backs it up), one open draft per campaign (partial unique index) | M1 |
 | RE-011 | `CampaignVersion` authoring: JSON schema for `conditions`/`benefits`/`counters`/`vars`/`content`, validated on save `[rule-authoring]` | TODO | RE-010 |
 | RE-012 | Attribute catalog + snapshot table (`attribute_def`, `attribute_snapshot`), sensitive-attribute flag enforced (no sensitive attrs in scripts/logs/exports) `[tenant-safety-check]` | TODO | M1 |
 | RE-013 | Condition evaluator against REQUEST/SNAPSHOT attribute sources (LOOKUP deliberately out of scope — see docs/architecture/overview.md) | TODO | RE-011, RE-012 |
