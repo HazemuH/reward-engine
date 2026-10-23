@@ -199,6 +199,25 @@ create table counter (
     unique (campaign_id, name, scope_key, period_key)
 );
 
+-- The attributes rules may use. Name, source and type never change once
+-- defined (stored values and approved conditions are read through them).
+-- sensitive: allowed in data conditions, never in scripts, logs or exports.
+create table attribute_def (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    name varchar(100) not null,
+    source varchar(20) not null,
+    data_type varchar(20) not null,
+    sensitive boolean not null default false,
+    description varchar(500),
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100),
+    unique (tenant_id, name)
+);
+
 create table redemption (
     id uuid primary key,
     tenant_id uuid not null references tenant(id),
