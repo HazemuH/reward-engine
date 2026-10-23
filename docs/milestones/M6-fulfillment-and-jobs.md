@@ -13,7 +13,7 @@ Everything that runs outside the payment transaction. Nothing here may ever unwi
 | RE-054 | `end-campaign` job — `ACTIVE` past end date → `ENDED` | TODO | RE-052 |
 | RE-055 | `expire-quote`, `expire-reserve`, `reconcile-pending` jobs | TODO | RE-052, M3 |
 | RE-056 | `budget-alert` job — flag campaigns at 80%/90% of quota or budget | TODO | RE-052 |
-| RE-057 | `snapshot-loader` job — load customer attribute snapshot (demographics, branch, tenure) from file or API, atomic swap, last-loaded timestamp surfaced | TODO | M2 (RE-012). Blocked on open-decisions.md #13 (data source) |
+| RE-057 | `snapshot-loader` job — load customer attribute snapshot (demographics, branch, tenure) from file or API through `AttributeSnapshotService` (begin → append batches → activate; the swap is already atomic there), row-count check before activating, purge superseded loads, last-loaded timestamp surfaced (`activeLoad()`) | TODO | M2 (RE-012). Blocked on open-decisions.md #13 (data source) |
 
 ## Exit criteria
 

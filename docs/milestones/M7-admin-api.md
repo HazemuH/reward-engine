@@ -6,13 +6,13 @@ The API surface the (future) Admin Panel talks to. Built and testable **without*
 
 | Ticket | Description | Status | Depends on |
 |---|---|---|---|
-| RE-060 | Campaign/version endpoints — list/create/draft-edit/submit-for-approval, optimistic-lock `409` on concurrent edit; submit runs the completeness checks in docs/architecture/rule-definition.md ("Save vs. submit") | TODO | M2 |
+| RE-060 | Campaign/version endpoints — list/create/draft-edit/submit-for-approval, optimistic-lock `409` on concurrent edit; submit runs the completeness checks in docs/architecture/rule-definition.md ("Save vs. submit"), including `AttributeCatalogService.requireDefined` on every condition attribute | TODO | M2 |
 | RE-061 | Approval inbox — `GET /approvals`, `POST /approvals/{id}/approve\|reject`, maker ≠ checker enforced at the service layer (not just UI) | TODO | RE-060 |
 | RE-062 | Pause/Resume/Stop-request/Kill-switch endpoints, matching the status diagram in `docs/architecture/overview.md` | TODO | RE-060 |
 | RE-063 | Codes endpoint — common/unique code management, revoke | TODO | M2 |
 | RE-064 | Customer search + redemption history (`customerRef`-based, no CIF in path/query — see `CLAUDE.md`) | TODO | M3 |
 | RE-065 | Operations endpoints — pending transactions, entitlement retry, manual resolution requests | TODO | M3, M6 |
-| RE-066 | Reports + CSV export (BOM UTF-8, CIF masked except for authorized roles, every full-CIF reveal audited) `[tenant-safety-check]` | TODO | M3 |
+| RE-066 | Reports + CSV export (BOM UTF-8, CIF masked except for authorized roles, every full-CIF reveal audited; no sensitive attribute values — docs/architecture/attributes.md) `[tenant-safety-check]` | TODO | M3 |
 | RE-067 | Library endpoints — reference sets, attribute catalog, snapshot feed config | TODO | M2 |
 | RE-068 | Audit log endpoint (read-only, for the Auditor role once RBAC exists) | TODO | — |
 

@@ -12,7 +12,7 @@ Whether a version is **complete enough to approve** is checked at submit (RE-060
 - at least one `CAMPAIGN`-scoped `MONEY` or `POINT` counter, so the campaign's maximum cost is bounded;
 - discount benefits only alongside `ALL_OR_NOTHING` counters (the quoted discount must be exactly what gets debited); `PARTIAL` only for points/cashback;
 - content present in every language the tenant serves;
-- condition attributes exist in the attribute catalog (RE-012) and `ref` names an existing reference set (RE-067).
+- condition attributes exist in the attribute catalog (`AttributeCatalogService.requireDefined`, see `docs/architecture/attributes.md`) and `ref` names an existing reference set (RE-067).
 
 ## Definition (`raw_definition`)
 

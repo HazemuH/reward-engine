@@ -218,6 +218,43 @@ create table attribute_def (
     unique (tenant_id, name)
 );
 
+-- One generation of the customer attribute snapshot. Activating a load
+-- supersedes the previous one in the same transaction (the atomic swap); at
+-- most one serves reads per tenant.
+create table snapshot_load (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    status varchar(20) not null,
+    row_count bigint not null default 0 check (row_count >= 0),
+    activated_at timestamptz,
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100),
+    constraint snapshot_load_activation_recorded check (
+        status in ('LOADING', 'FAILED') or activated_at is not null)
+);
+
+create unique index uq_snapshot_load_active
+    on snapshot_load (tenant_id) where status = 'ACTIVE';
+
+-- Not history: superseded generations are purged by the loader's retention
+-- (RE-057), taking their rows with them, hence the cascade.
+create table attribute_snapshot (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    load_id uuid not null references snapshot_load(id) on delete cascade,
+    user_key varchar(200) not null,
+    attributes jsonb not null,
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100),
+    unique (load_id, user_key)
+);
+
 create table redemption (
     id uuid primary key,
     tenant_id uuid not null references tenant(id),

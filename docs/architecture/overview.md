@@ -29,7 +29,7 @@ A rule engine for promo codes and referral rewards, generalized from real-world 
 
 ## Rule model
 
-One `CampaignVersion` = `conditions` (from an attribute catalog) + `benefits` + `counters` + `vars` + an optional `script` + bilingual `content`. Most rules need no script at all; a script is only for a calculation the condition/benefit/counter vocabulary can't express. Field-by-field schema, and what's checked at save vs. at submit: `docs/architecture/rule-definition.md`.
+One `CampaignVersion` = `conditions` (from an attribute catalog) + `benefits` + `counters` + `vars` + an optional `script` + bilingual `content`. Most rules need no script at all; a script is only for a calculation the condition/benefit/counter vocabulary can't express. Field-by-field schema, and what's checked at save vs. at submit: `docs/architecture/rule-definition.md`. Attribute catalog, sensitive attributes and the customer snapshot: `docs/architecture/attributes.md`.
 
 Script contract (enforced by structure, not convention — design in `docs/milestones/M4-script-sandbox.md`):
 - Language: Groovy, compiled with static type checking at save time. Every method call and property access must be on an explicit allowlist; anything else fails compilation. Annotations, imports outside the allowlist, class/method declarations and global AST transformations are rejected, so nothing runs at compile time either.
@@ -88,6 +88,10 @@ Admin-side codes (campaign authoring):
 | `DRAFT_ALREADY_OPEN` | Campaign already has an open draft version (one at a time) |
 | `CAMPAIGN_NAME_INVALID` | Campaign name blank or longer than 200 characters |
 | `RULE_DEFINITION_INVALID` | Rule definition breaks the schema; `details` lists every violation (`docs/architecture/rule-definition.md`) |
+| `ATTRIBUTE_INVALID` / `ATTRIBUTE_ALREADY_DEFINED` / `ATTRIBUTE_NOT_FOUND` | Catalog entry malformed, name taken in this tenant, or no such attribute |
+| `ATTRIBUTE_NOT_DEFINED` | A rule names attributes that are neither in the catalog nor built in; `details` lists them |
+| `SNAPSHOT_ROWS_INVALID` | A snapshot batch has invalid rows; `details` names each row and attribute, never the value |
+| `SNAPSHOT_LOAD_NOT_FOUND` / `SNAPSHOT_LOAD_NOT_OPEN` | No such load for this tenant, or the load is no longer `LOADING` |
 | `COUNTER_LIMITS_INVALID` | A counter limit is malformed (name, missing field, `PARTIAL` on `COUNT`, cap ≤ 0); `details` lists every violation |
 
 ## What's intentionally not built yet
