@@ -1,8 +1,6 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
-import com.rewardengine.core.counter.CounterDef;
-import com.rewardengine.core.counter.CounterDefRepository;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -27,13 +25,13 @@ public class CampaignService {
 
 	private final CampaignRepository campaigns;
 	private final CampaignVersionRepository versions;
-	private final CounterDefRepository counterDefs;
+	private final VersionCarryOver carryOver;
 
 	public CampaignService(CampaignRepository campaigns, CampaignVersionRepository versions,
-			CounterDefRepository counterDefs) {
+			VersionCarryOver carryOver) {
 		this.campaigns = campaigns;
 		this.versions = versions;
-		this.counterDefs = counterDefs;
+		this.carryOver = carryOver;
 	}
 
 	/** New campaign in DRAFT with its first version (v1) as an open draft. */
@@ -95,9 +93,7 @@ public class CampaignService {
 		}
 		CampaignVersion draft = versions.saveAndFlush(
 				newVersion(campaignId, latest.getVersionNumber() + 1, DraftContent.copyOf(latest)));
-		counterDefs.saveAll(counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(latest.getId()).stream()
-				.map(def -> def.copyFor(draft.getId()))
-				.toList());
+		carryOver.carryOver(latest.getId(), draft.getId());
 		return draft;
 	}
 

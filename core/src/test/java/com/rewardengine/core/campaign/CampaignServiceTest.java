@@ -261,6 +261,24 @@ class CampaignServiceTest {
 	}
 
 	@Test
+	void rolledBackOpenDraftLeavesNoDraftOrCopiedLimitsBehind() {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		addCounterDef(tenant, v1.getId(), 100);
+		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+
+		UUID draftId = TenantContext.callAs(tenant, () -> new TransactionTemplate(txManager).execute(tx -> {
+			UUID id = service.openDraft(v1.getCampaignId()).getId();
+			tx.setRollbackOnly();
+			return id;
+		}));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.versions(v1.getCampaignId()))).hasSize(1);
+		assertThat(TenantContext.callAs(tenant, () -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(draftId)))
+				.isEmpty();
+	}
+
+	@Test
 	void blankOrOverlongNameIsRejectedWithACode() {
 		UUID tenant = newTenant();
 
