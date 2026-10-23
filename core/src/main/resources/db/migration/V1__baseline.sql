@@ -90,9 +90,11 @@ create unique index uq_campaign_version_draft
 -- refusing the way back to DRAFT closes "flip status, then edit".
 --
 -- The child-table triggers below (channels, counter_def) check the parent's
--- status at the time each row is written. Hibernate flushes the parent UPDATE
--- before collection rows, so a flow that edits a draft and moves it out of
--- DRAFT in one transaction must flush the edit first (CampaignService.editDraft does).
+-- status when each row is written. Hibernate flushes entity inserts (counter_def)
+-- before entity updates, but collection rows (channels) after them, so a flow
+-- that edits a draft and moves it out of DRAFT in one transaction must flush
+-- the edit before changing status (CampaignService.editDraft does); otherwise
+-- the channel write is rejected and the transaction rolls back.
 create function reject_frozen_version_content() returns trigger as $$
 begin
     if new.campaign_id is distinct from old.campaign_id
@@ -120,18 +122,25 @@ create table campaign_version_channel (
 );
 
 -- Shared by every table whose rows are part of a version's content. Checks
--- both parents on UPDATE (a row moved out of a frozen version is a change to
--- it), and takes FOR SHARE on the parent so a concurrent status change waits
--- for this write instead of racing past it.
+-- the old parent too when a row is moved (moving it out of a frozen version
+-- changes that version).
+--
+-- Locks the parent FOR NO KEY UPDATE — the lock an UPDATE of it takes anyway —
+-- so a concurrent status change waits for this write instead of racing past
+-- it, and a transaction that writes children then updates the version never
+-- has to upgrade its lock (FOR SHARE would deadlock two such writers). FK
+-- checks on the reserve path take KEY SHARE, which this doesn't block.
 create function reject_frozen_version_child() returns trigger as $$
 declare
     version_id uuid;
     parent_status varchar(30);
 begin
     foreach version_id in array array_remove(array[
-            case when tg_op <> 'INSERT' then old.campaign_version_id end,
+            case when tg_op = 'DELETE'
+                   or (tg_op = 'UPDATE' and old.campaign_version_id is distinct from new.campaign_version_id)
+                 then old.campaign_version_id end,
             case when tg_op <> 'DELETE' then new.campaign_version_id end], null) loop
-        select status into parent_status from campaign_version where id = version_id for share;
+        select status into parent_status from campaign_version where id = version_id for no key update;
         if found and parent_status <> 'DRAFT' then
             raise exception 'campaign_version % has left DRAFT; its % rows are frozen', version_id, tg_table_name;
         end if;

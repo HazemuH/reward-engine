@@ -184,8 +184,35 @@ class CampaignServiceTest {
 				v2.getId(), v1.getId()))
 				.hasMessageContaining("frozen");
 		assertThatThrownBy(() -> jdbc.update(
+				"update counter_def set campaign_version_id = ? where campaign_version_id = ?", v1.getId(), v2.getId()))
+				.hasMessageContaining("frozen");
+		assertThatThrownBy(() -> jdbc.update(
 				"update campaign_version set version_number = 9 where id = ?", v2.getId()))
 				.hasMessageContaining("renumbered");
+		UUID otherCampaign = TenantContext.callAs(tenant, () -> service.create("Other", V1)).getCampaignId();
+		assertThatThrownBy(() -> jdbc.update(
+				"update campaign_version set campaign_id = ? where id = ?", otherCampaign, v2.getId()))
+				.hasMessageContaining("moved");
+	}
+
+	@Test
+	void concurrentChildWritesThenVersionUpdatesDoNotDeadlock() throws Exception {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		TransactionTemplate tx = new TransactionTemplate(txManager);
+		List<Callable<Integer>> writers = IntStream.range(0, 10)
+				.<Callable<Integer>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> tx.execute(status -> {
+					CounterDef def = new CounterDef();
+					def.setCampaignVersionId(v1.getId());
+					counterDefs.saveAndFlush(fill(def, "quota-" + i, 10));
+					return jdbc.update("update campaign_version set optional_script = ? where id = ?",
+							"writer " + i, v1.getId());
+				})))
+				.toList();
+
+		assertThat(race(writers)).isEmpty();
+		assertThat(TenantContext.callAs(tenant,
+				() -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(v1.getId()))).hasSize(10);
 	}
 
 	@Test
@@ -196,7 +223,7 @@ class CampaignServiceTest {
 		try {
 			// state is read while the lock is still held; after commit the insert would finish either way
 			Future.State whileLocked = TenantContext.callAs(tenant, () -> new TransactionTemplate(txManager).execute(tx -> {
-				campaigns.lockForNewVersion(v1.getCampaignId(), tenant).orElseThrow();
+				campaigns.lockForNewVersion(v1.getCampaignId()).orElseThrow();
 				Future<Counter> concurrent = executor.submit(() -> TenantContext.callAs(tenant, () -> {
 					Counter counter = new Counter();
 					counter.setCampaignId(v1.getCampaignId());
@@ -345,8 +372,10 @@ class CampaignServiceTest {
 	private static void awaitQuietly(Future<?> future) {
 		try {
 			future.get(5, TimeUnit.SECONDS);
-		} catch (TimeoutException | ExecutionException e) {
-			// asserted by the caller through the future's state
+		} catch (TimeoutException e) {
+			// still blocked: the caller asserts on the future's state
+		} catch (ExecutionException e) {
+			throw new AssertionError("concurrent write failed rather than blocked", e.getCause());
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}

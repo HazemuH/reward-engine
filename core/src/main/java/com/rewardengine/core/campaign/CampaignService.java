@@ -1,7 +1,6 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
-import com.rewardengine.common.tenant.TenantContext;
 import com.rewardengine.core.counter.CounterDef;
 import com.rewardengine.core.counter.CounterDefRepository;
 import java.util.List;
@@ -88,7 +87,7 @@ public class CampaignService {
 	 */
 	@Transactional
 	public CampaignVersion openDraft(UUID campaignId) {
-		campaigns.lockForNewVersion(campaignId, TenantContext.get()).orElseThrow(() -> campaignNotFound(campaignId));
+		campaigns.lockForNewVersion(campaignId).orElseThrow(() -> campaignNotFound(campaignId));
 		CampaignVersion latest = versions.findFirstByCampaignIdOrderByVersionNumberDesc(campaignId).orElseThrow();
 		if (latest.getStatus() == CampaignVersionStatus.DRAFT) {
 			throw new BusinessRuleException("DRAFT_ALREADY_OPEN",
