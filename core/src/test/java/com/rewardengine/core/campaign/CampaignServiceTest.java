@@ -13,6 +13,7 @@ import com.rewardengine.core.TestcontainersConfiguration;
 import com.rewardengine.core.counter.Counter;
 import com.rewardengine.core.counter.CounterDef;
 import com.rewardengine.core.counter.CounterDefRepository;
+import com.rewardengine.core.counter.CounterLimit;
 import com.rewardengine.core.counter.CounterMode;
 import com.rewardengine.core.counter.CounterPeriod;
 import com.rewardengine.core.counter.CounterRepository;
@@ -38,6 +39,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -47,7 +49,8 @@ class CampaignServiceTest {
 
 	// Written in jsonb's canonical spacing so a round-trip through Postgres compares equal.
 	private static final DraftContent V1 = new DraftContent("{\"conditions\": []}", null, Set.of("MOBILE"));
-	private static final DraftContent V2 = new DraftContent("{\"conditions\": [{\"attr\": \"segment\"}]}",
+	private static final DraftContent V2 = new DraftContent(
+			"{\"conditions\": [{\"op\": \"=\", \"attr\": \"segment\", \"value\": \"GOLD\"}]}",
 			"return decision", Set.of("MOBILE", "WEB"));
 
 	@Autowired
@@ -162,11 +165,9 @@ class CampaignServiceTest {
 		assertThatThrownBy(() -> jdbc.update(
 				"update counter_def set cap = 1000000 where campaign_version_id = ?", v1.getId()))
 				.hasMessageContaining("frozen");
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> {
-			CounterDef extra = new CounterDef();
-			extra.setCampaignVersionId(v1.getId());
-			return counterDefs.saveAndFlush(fill(extra, "extra", 5));
-		})).hasMessageContaining("frozen");
+		assertThatThrownBy(() -> TenantContext.callAs(tenant,
+				() -> counterDefs.saveAndFlush(CounterDef.define(v1.getId(), limit("extra", 5), 1))))
+				.hasMessageContaining("frozen");
 	}
 
 	@Test
@@ -203,9 +204,7 @@ class CampaignServiceTest {
 		TransactionTemplate tx = new TransactionTemplate(txManager);
 		List<Callable<Integer>> writers = IntStream.range(0, 10)
 				.<Callable<Integer>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> tx.execute(status -> {
-					CounterDef def = new CounterDef();
-					def.setCampaignVersionId(v1.getId());
-					counterDefs.saveAndFlush(fill(def, "quota-" + i, 10));
+					counterDefs.saveAndFlush(CounterDef.define(v1.getId(), limit("quota_" + i, 10), i));
 					return jdbc.update("update campaign_version set optional_script = ? where id = ?",
 							"writer " + i, v1.getId());
 				})))
@@ -295,6 +294,104 @@ class CampaignServiceTest {
 		CampaignVersion saved = TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), V2));
 
 		assertThat(saved.getVersion()).isEqualTo(v1.getVersion());
+	}
+
+	@Test
+	void resaveInAnotherSpellingIsStoredCanonicallyAndDoesNotBumpVersion() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V2));
+		// same definition, other key order and spacing
+		DraftContent respelled = new DraftContent("""
+				{ "conditions" : [ { "value":"GOLD","attr":"segment","op":"=" } ] }""",
+				V2.optionalScript(), V2.channels());
+
+		CampaignVersion saved = TenantContext.callAs(tenant,
+				() -> service.editDraft(v1.getId(), v1.getVersion(), respelled));
+
+		assertThat(saved.getVersion()).isEqualTo(v1.getVersion());
+		assertThat(saved.getRawDefinition()).isEqualTo(V2.rawDefinition());
+	}
+
+	@Test
+	void invalidDefinitionIsRejectedWithEveryViolationAndNothingIsWritten() {
+		UUID tenant = newTenant(tenants);
+		DraftContent invalid = new DraftContent(
+				"{\"conditions\": [{\"attr\": \"segment\"}], \"counters\": []}", null, Set.of());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", invalid)))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+					assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
+					assertThat(e.getDetails()).hasSize(2).anyMatch(d -> d.startsWith("counters:"))
+							.anyMatch(d -> d.startsWith("conditions[0].op:"));
+				});
+		assertThat(TenantContext.callAs(tenant, () -> service.list(Pageable.unpaged()))).isEmpty();
+
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		assertRejected(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), invalid), "RULE_DEFINITION_INVALID");
+		assertThat(TenantContext.callAs(tenant, () -> service.getVersion(v1.getId())).getVersion())
+				.isEqualTo(v1.getVersion());
+	}
+
+	@Test
+	void jsonThatJsonbCannotStoreIsAValidationErrorNotADatabaseError() {
+		UUID tenant = newTenant(tenants);
+		DraftContent nul = new DraftContent("{\"vars\": {\"x\": \"a\\u0000b\"}}", null, Set.of());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", nul)))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+					assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
+					assertThat(e.getDetails()).singleElement().asString().startsWith("not storable as jsonb");
+				});
+	}
+
+	@Test
+	void staleOrFrozenVersionIsReportedBeforeSchemaViolations() {
+		UUID tenant = newTenant(tenants);
+		DraftContent invalid = new DraftContent("{\"trigger\": \"AUTO\"}", null, Set.of());
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), 99, invalid)))
+				.isInstanceOf(ObjectOptimisticLockingFailureException.class);
+		CampaignVersion pending = moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.PENDING_APPROVAL);
+		assertRejected(tenant, () -> service.editDraft(pending.getId(), pending.getVersion(), invalid),
+				"VERSION_NOT_EDITABLE");
+		assertRejected(tenant, () -> service.editDraft(UUID.randomUUID(), 0, invalid), "VERSION_NOT_FOUND");
+	}
+
+	@Test
+	void claimDraftBumpsTheVersionOnlyForItsOwnTenant() {
+		UUID owner = newTenant(tenants);
+		UUID other = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(owner, () -> service.create("Campaign", V1));
+		TransactionTemplate tx = new TransactionTemplate(txManager);
+
+		// the bulk UPDATE is filtered on its own, not only by the lookup in front of it
+		assertThatThrownBy(() -> TenantContext.callAs(other,
+				() -> tx.execute(status -> {
+					service.claimDraft(v1);
+					return null;
+				})))
+				.isInstanceOf(ObjectOptimisticLockingFailureException.class);
+		CampaignVersion claimed = TenantContext.callAs(owner, () -> tx.execute(status -> {
+			CampaignVersion version = service.getVersion(v1.getId());
+			service.claimDraft(version);
+			return version;
+		}));
+
+		assertThat(claimed.getVersion()).isEqualTo(v1.getVersion() + 1);
+		assertThat(TenantContext.callAs(owner, () -> service.getVersion(v1.getId())).getVersion())
+				.isEqualTo(v1.getVersion() + 1);
+	}
+
+	@Test
+	void claimDraftRefusesToRunOutsideATransaction() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> {
+			service.claimDraft(v1);
+			return null;
+		})).isInstanceOf(IllegalTransactionStateException.class);
 	}
 
 	@Test
@@ -401,21 +498,11 @@ class CampaignServiceTest {
 	}
 
 	private void addCounterDef(UUID tenant, UUID versionId, long cap) {
-		TenantContext.callAs(tenant, () -> {
-			CounterDef def = new CounterDef();
-			def.setCampaignVersionId(versionId);
-			return counterDefs.saveAndFlush(fill(def, "quota", cap));
-		});
+		TenantContext.callAs(tenant, () -> counterDefs.saveAndFlush(CounterDef.define(versionId, limit("quota", cap), 0)));
 	}
 
-	private static CounterDef fill(CounterDef def, String name, long cap) {
-		def.setName(name);
-		def.setScope(CounterScope.CAMPAIGN);
-		def.setUnit(CounterUnit.COUNT);
-		def.setPeriod(CounterPeriod.CAMPAIGN);
-		def.setMode(CounterMode.ALL_OR_NOTHING);
-		def.setCap(cap);
-		def.setSortOrder(0);
-		return def;
+	private static CounterLimit limit(String name, long cap) {
+		return new CounterLimit(name, CounterScope.CAMPAIGN, CounterUnit.COUNT, CounterPeriod.CAMPAIGN,
+				CounterMode.ALL_OR_NOTHING, cap);
 	}
 }

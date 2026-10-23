@@ -6,7 +6,7 @@ The API surface the (future) Admin Panel talks to. Built and testable **without*
 
 | Ticket | Description | Status | Depends on |
 |---|---|---|---|
-| RE-060 | Campaign/version endpoints — list/create/draft-edit/submit-for-approval, optimistic-lock `409` on concurrent edit | TODO | M2 |
+| RE-060 | Campaign/version endpoints — list/create/draft-edit/submit-for-approval, optimistic-lock `409` on concurrent edit; submit runs the completeness checks in docs/architecture/rule-definition.md ("Save vs. submit") | TODO | M2 |
 | RE-061 | Approval inbox — `GET /approvals`, `POST /approvals/{id}/approve\|reject`, maker ≠ checker enforced at the service layer (not just UI) | TODO | RE-060 |
 | RE-062 | Pause/Resume/Stop-request/Kill-switch endpoints, matching the status diagram in `docs/architecture/overview.md` | TODO | RE-060 |
 | RE-063 | Codes endpoint — common/unique code management, revoke | TODO | M2 |

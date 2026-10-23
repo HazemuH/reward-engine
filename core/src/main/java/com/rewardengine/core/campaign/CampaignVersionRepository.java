@@ -10,7 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * Lookups fetch channels with the version: versions leave the service
  * transaction (open-in-view is off) and channels are always read with them.
  */
-public interface CampaignVersionRepository extends JpaRepository<CampaignVersion, UUID> {
+public interface CampaignVersionRepository extends JpaRepository<CampaignVersion, UUID>, DraftClaim {
 
 	@Override
 	@EntityGraph(attributePaths = "channels")

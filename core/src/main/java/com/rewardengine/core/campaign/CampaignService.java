@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -26,21 +27,25 @@ public class CampaignService {
 	private final CampaignRepository campaigns;
 	private final CampaignVersionRepository versions;
 	private final VersionCarryOver carryOver;
+	private final RuleDefinitionCanonicalizer canonicalizer;
 
-	public CampaignService(CampaignRepository campaigns, CampaignVersionRepository versions,
-			VersionCarryOver carryOver) {
+	CampaignService(CampaignRepository campaigns, CampaignVersionRepository versions,
+			VersionCarryOver carryOver, RuleDefinitionCanonicalizer canonicalizer) {
 		this.campaigns = campaigns;
 		this.versions = versions;
 		this.carryOver = carryOver;
+		this.canonicalizer = canonicalizer;
 	}
 
 	/** New campaign in DRAFT with its first version (v1) as an open draft. */
 	@Transactional
 	public CampaignVersion create(String name, DraftContent content) {
+		String validName = requireName(name);
+		DraftContent validContent = validated(content);
 		Campaign campaign = new Campaign();
-		campaign.setName(requireName(name));
+		campaign.setName(validName);
 		UUID campaignId = campaigns.save(campaign).getId();
-		return versions.saveAndFlush(newVersion(campaignId, 1, content));
+		return versions.saveAndFlush(newVersion(campaignId, 1, validContent));
 	}
 
 	public Page<Campaign> list(Pageable pageable) {
@@ -99,10 +104,45 @@ public class CampaignService {
 
 	@Transactional
 	public CampaignVersion editDraft(UUID versionId, long expectedVersion, DraftContent content) {
+		CampaignVersion version = editableDraft(versionId, expectedVersion);
+		version.editDraft(validated(content));
+		return versions.saveAndFlush(version);
+	}
+
+	/**
+	 * The draft the caller last read, still a draft. Checked before any content
+	 * validation: fixing every violation only to then hit a 409 wastes the
+	 * editor's work.
+	 */
+	public CampaignVersion editableDraft(UUID versionId, long expectedVersion) {
 		CampaignVersion version = getVersion(versionId);
 		checkVersion(CampaignVersion.class, versionId, expectedVersion, version.getVersion());
-		version.editDraft(content);
-		return versions.saveAndFlush(version);
+		version.requireDraft();
+		return version;
+	}
+
+	/**
+	 * For features that own version content outside this package (counter
+	 * limits): bumps the draft's @Version before they replace their rows, so
+	 * their edits and content edits made from the same stale read can't both win.
+	 * {@code version} comes back carrying the new @Version.
+	 *
+	 * MANDATORY: the bump only guards rows written in the same transaction.
+	 */
+	@Transactional(propagation = Propagation.MANDATORY)
+	public void claimDraft(CampaignVersion version) {
+		versions.claimDraft(version);
+	}
+
+	/**
+	 * Schema-checked and in jsonb's canonical form. openDraft copies the latest
+	 * version's stored (already canonical) text as-is, so a schema tightened since
+	 * then is applied at the next edit and at submit, not when the draft opens.
+	 */
+	private DraftContent validated(DraftContent content) {
+		RuleDefinitionValidator.validate(content.rawDefinition());
+		return new DraftContent(canonicalizer.canonicalize(content.rawDefinition()), content.optionalScript(),
+				content.channels());
 	}
 
 	private static CampaignVersion newVersion(UUID campaignId, int versionNumber, DraftContent content) {

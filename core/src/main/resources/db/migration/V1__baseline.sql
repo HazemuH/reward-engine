@@ -170,7 +170,10 @@ create table counter_def (
     created_by varchar(100),
     updated_at timestamptz,
     updated_by varchar(100),
-    unique (campaign_version_id, name)
+    unique (campaign_version_id, name),
+    -- sort_order is the evaluation order (a PARTIAL counter shrinks what the next
+    -- one is offered); a tie would make it depend on how rows come back
+    unique (campaign_version_id, sort_order)
 );
 
 -- The approved cap is version content too: frozen with its version.
