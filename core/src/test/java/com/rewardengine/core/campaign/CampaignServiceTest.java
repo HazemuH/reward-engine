@@ -6,10 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.common.tenant.TenantContext;
 import com.rewardengine.core.TestcontainersConfiguration;
+import com.rewardengine.core.counter.Counter;
 import com.rewardengine.core.counter.CounterDef;
 import com.rewardengine.core.counter.CounterDefRepository;
 import com.rewardengine.core.counter.CounterMode;
 import com.rewardengine.core.counter.CounterPeriod;
+import com.rewardengine.core.counter.CounterRepository;
 import com.rewardengine.core.counter.CounterScope;
 import com.rewardengine.core.counter.CounterUnit;
 import com.rewardengine.core.tenant.Tenant;
@@ -21,8 +23,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +37,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -53,6 +60,15 @@ class CampaignServiceTest {
 
 	@Autowired
 	CounterDefRepository counterDefs;
+
+	@Autowired
+	CampaignRepository campaigns;
+
+	@Autowired
+	CounterRepository counters;
+
+	@Autowired
+	PlatformTransactionManager txManager;
 
 	@Autowired
 	JdbcTemplate jdbc;
@@ -150,6 +166,51 @@ class CampaignServiceTest {
 			extra.setCampaignVersionId(v1.getId());
 			return counterDefs.saveAndFlush(fill(extra, "extra", 5));
 		})).hasMessageContaining("frozen");
+	}
+
+	@Test
+	void rowsCannotBeMovedOutOfAFrozenVersionNorTheVersionRenumbered() {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		addCounterDef(tenant, v1.getId(), 100);
+		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		CampaignVersion v2 = TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId()));
+
+		assertThatThrownBy(() -> jdbc.update(
+				"update counter_def set campaign_version_id = ? where campaign_version_id = ?", v2.getId(), v1.getId()))
+				.hasMessageContaining("frozen");
+		assertThatThrownBy(() -> jdbc.update(
+				"update campaign_version_channel set campaign_version_id = ? where campaign_version_id = ?",
+				v2.getId(), v1.getId()))
+				.hasMessageContaining("frozen");
+		assertThatThrownBy(() -> jdbc.update(
+				"update campaign_version set version_number = 9 where id = ?", v2.getId()))
+				.hasMessageContaining("renumbered");
+	}
+
+	@Test
+	void newVersionLockDoesNotBlockCounterInsertsForTheCampaign() throws Exception {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+		try {
+			// state is read while the lock is still held; after commit the insert would finish either way
+			Future.State whileLocked = TenantContext.callAs(tenant, () -> new TransactionTemplate(txManager).execute(tx -> {
+				campaigns.lockForNewVersion(v1.getCampaignId(), tenant).orElseThrow();
+				Future<Counter> concurrent = executor.submit(() -> TenantContext.callAs(tenant, () -> {
+					Counter counter = new Counter();
+					counter.setCampaignId(v1.getCampaignId());
+					counter.setName("quota");
+					return counters.saveAndFlush(counter);
+				}));
+				awaitQuietly(concurrent);
+				return concurrent.state();
+			}));
+
+			assertThat(whileLocked).isEqualTo(Future.State.SUCCESS);
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
@@ -278,6 +339,17 @@ class CampaignServiceTest {
 		assertRejected(other, () -> service.editDraft(v1.getId(), v1.getVersion(), V2), "VERSION_NOT_FOUND");
 		assertThat(TenantContext.callAs(owner, () -> service.getVersion(v1.getId())).getRawDefinition())
 				.isEqualTo(V1.rawDefinition());
+	}
+
+	/** Waits while the caller still holds its lock; a blocked insert shows up as not done. */
+	private static void awaitQuietly(Future<?> future) {
+		try {
+			future.get(5, TimeUnit.SECONDS);
+		} catch (TimeoutException | ExecutionException e) {
+			// asserted by the caller through the future's state
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private void addCounterDef(UUID tenant, UUID versionId, long cap) {

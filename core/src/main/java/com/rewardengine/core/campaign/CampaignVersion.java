@@ -77,7 +77,8 @@ public class CampaignVersion extends TenantScopedEntity {
 		}
 		rawDefinition = content.rawDefinition();
 		optionalScript = content.optionalScript();
-		// retain+add rather than clear+add: an unchanged save stays clean and doesn't bump @Version
+		// retain+add rather than clear+add: unchanged channels stay clean and don't bump @Version.
+		// rawDefinition only stays clean if sent in jsonb's canonical form — RE-011 canonicalizes it.
 		channels.retainAll(content.channels());
 		channels.addAll(content.channels());
 	}

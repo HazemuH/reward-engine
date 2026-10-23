@@ -1,6 +1,7 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.common.tenant.TenantContext;
 import com.rewardengine.core.counter.CounterDef;
 import com.rewardengine.core.counter.CounterDefRepository;
 import java.util.List;
@@ -53,11 +54,13 @@ public class CampaignService {
 		return campaigns.findById(campaignId).orElseThrow(() -> campaignNotFound(campaignId));
 	}
 
+	/** Every campaign has at least v1, so an empty result means no such campaign for this tenant. */
 	public List<CampaignVersion> versions(UUID campaignId) {
-		if (!campaigns.existsById(campaignId)) {
+		List<CampaignVersion> found = versions.findByCampaignIdOrderByVersionNumberAsc(campaignId);
+		if (found.isEmpty()) {
 			throw campaignNotFound(campaignId);
 		}
-		return versions.findByCampaignIdOrderByVersionNumberAsc(campaignId);
+		return found;
 	}
 
 	public CampaignVersion getVersion(UUID versionId) {
@@ -85,7 +88,7 @@ public class CampaignService {
 	 */
 	@Transactional
 	public CampaignVersion openDraft(UUID campaignId) {
-		campaigns.findForUpdate(campaignId).orElseThrow(() -> campaignNotFound(campaignId));
+		campaigns.lockForNewVersion(campaignId, TenantContext.get()).orElseThrow(() -> campaignNotFound(campaignId));
 		CampaignVersion latest = versions.findFirstByCampaignIdOrderByVersionNumberDesc(campaignId).orElseThrow();
 		if (latest.getStatus() == CampaignVersionStatus.DRAFT) {
 			throw new BusinessRuleException("DRAFT_ALREADY_OPEN",
@@ -123,7 +126,8 @@ public class CampaignService {
 
 	private static String requireName(String name) {
 		String stripped = name == null ? "" : name.strip();
-		if (stripped.isEmpty() || stripped.length() > MAX_NAME_LENGTH) {
+		// code points, not UTF-16 units: varchar(200) counts characters
+		if (stripped.isEmpty() || stripped.codePointCount(0, stripped.length()) > MAX_NAME_LENGTH) {
 			throw new BusinessRuleException("CAMPAIGN_NAME_INVALID",
 					"Campaign name must be 1-" + MAX_NAME_LENGTH + " characters");
 		}

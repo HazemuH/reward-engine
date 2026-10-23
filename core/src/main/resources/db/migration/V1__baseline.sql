@@ -95,6 +95,10 @@ create unique index uq_campaign_version_draft
 -- DRAFT in one transaction must flush the edit first (CampaignService.editDraft does).
 create function reject_frozen_version_content() returns trigger as $$
 begin
+    if new.campaign_id is distinct from old.campaign_id
+       or new.version_number is distinct from old.version_number then
+        raise exception 'campaign_version % cannot be moved or renumbered', old.id;
+    end if;
     if old.status <> 'DRAFT'
        and (new.status = 'DRAFT'
             or new.raw_definition is distinct from old.raw_definition
@@ -115,14 +119,23 @@ create table campaign_version_channel (
     primary key (campaign_version_id, channel)
 );
 
--- Shared by every table whose rows are part of a version's content.
+-- Shared by every table whose rows are part of a version's content. Checks
+-- both parents on UPDATE (a row moved out of a frozen version is a change to
+-- it), and takes FOR SHARE on the parent so a concurrent status change waits
+-- for this write instead of racing past it.
 create function reject_frozen_version_child() returns trigger as $$
 declare
-    version_id uuid := coalesce(new.campaign_version_id, old.campaign_version_id);
+    version_id uuid;
+    parent_status varchar(30);
 begin
-    if exists (select 1 from campaign_version where id = version_id and status <> 'DRAFT') then
-        raise exception 'campaign_version % has left DRAFT; its % rows are frozen', version_id, tg_table_name;
-    end if;
+    foreach version_id in array array_remove(array[
+            case when tg_op <> 'INSERT' then old.campaign_version_id end,
+            case when tg_op <> 'DELETE' then new.campaign_version_id end], null) loop
+        select status into parent_status from campaign_version where id = version_id for share;
+        if found and parent_status <> 'DRAFT' then
+            raise exception 'campaign_version % has left DRAFT; its % rows are frozen', version_id, tg_table_name;
+        end if;
+    end loop;
     return coalesce(new, old);
 end;
 $$ language plpgsql;
