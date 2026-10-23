@@ -7,7 +7,8 @@ import java.util.UUID;
  * carry into a newly opened draft. Defined here and implemented by the owning
  * feature so campaign doesn't depend on it; injected as a single bean so a
  * missing implementation fails startup instead of silently opening drafts
- * without their limits.
+ * without their limits. A second implementation means switching CampaignService
+ * to a list while keeping that startup check.
  */
 public interface VersionCarryOver {
 

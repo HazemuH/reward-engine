@@ -37,7 +37,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
-import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -70,9 +69,6 @@ class CampaignServiceTest {
 
 	@Autowired
 	PlatformTransactionManager txManager;
-
-	@Autowired
-	VersionCarryOver carryOver;
 
 	@Autowired
 	JdbcTemplate jdbc;
@@ -265,12 +261,21 @@ class CampaignServiceTest {
 	}
 
 	@Test
-	void carryOverRefusesToRunOutsideTheDraftTransaction() {
+	void rolledBackOpenDraftLeavesNoDraftOrCopiedLimitsBehind() {
 		UUID tenant = newTenant();
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		addCounterDef(tenant, v1.getId(), 100);
+		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
-		assertThatThrownBy(() -> TenantContext.runAs(tenant, () -> carryOver.carryOver(v1.getId(), UUID.randomUUID())))
-				.isInstanceOf(IllegalTransactionStateException.class);
+		UUID draftId = TenantContext.callAs(tenant, () -> new TransactionTemplate(txManager).execute(tx -> {
+			UUID id = service.openDraft(v1.getCampaignId()).getId();
+			tx.setRollbackOnly();
+			return id;
+		}));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.versions(v1.getCampaignId()))).hasSize(1);
+		assertThat(TenantContext.callAs(tenant, () -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(draftId)))
+				.isEmpty();
 	}
 
 	@Test
