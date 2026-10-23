@@ -1,5 +1,9 @@
 package com.rewardengine.core.campaign;
 
+import static com.rewardengine.core.TestSupport.assertRejected;
+import static com.rewardengine.core.TestSupport.moveTo;
+import static com.rewardengine.core.TestSupport.newTenant;
+import static com.rewardengine.core.TestSupport.race;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -9,15 +13,13 @@ import com.rewardengine.core.TestcontainersConfiguration;
 import com.rewardengine.core.counter.Counter;
 import com.rewardengine.core.counter.CounterDef;
 import com.rewardengine.core.counter.CounterDefRepository;
+import com.rewardengine.core.counter.CounterLimit;
 import com.rewardengine.core.counter.CounterMode;
 import com.rewardengine.core.counter.CounterPeriod;
 import com.rewardengine.core.counter.CounterRepository;
 import com.rewardengine.core.counter.CounterScope;
 import com.rewardengine.core.counter.CounterUnit;
-import com.rewardengine.core.tenant.Tenant;
 import com.rewardengine.core.tenant.TenantRepository;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -37,6 +39,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -46,7 +49,8 @@ class CampaignServiceTest {
 
 	// Written in jsonb's canonical spacing so a round-trip through Postgres compares equal.
 	private static final DraftContent V1 = new DraftContent("{\"conditions\": []}", null, Set.of("MOBILE"));
-	private static final DraftContent V2 = new DraftContent("{\"conditions\": [{\"attr\": \"segment\"}]}",
+	private static final DraftContent V2 = new DraftContent(
+			"{\"conditions\": [{\"op\": \"=\", \"attr\": \"segment\", \"value\": \"GOLD\"}]}",
 			"return decision", Set.of("MOBILE", "WEB"));
 
 	@Autowired
@@ -75,7 +79,7 @@ class CampaignServiceTest {
 
 	@Test
 	void createStartsCampaignAndFirstVersionAsDraft() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("  Weekend cashback ", V1));
 
@@ -91,7 +95,7 @@ class CampaignServiceTest {
 
 	@Test
 	void editDraftReplacesContentAndBumpsVersion() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 
 		CampaignVersion edited = TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), V2));
@@ -104,7 +108,7 @@ class CampaignServiceTest {
 
 	@Test
 	void staleExpectedVersionIsRejected() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), V2));
 
@@ -116,9 +120,9 @@ class CampaignServiceTest {
 
 	@Test
 	void contentIsFrozenOnceVersionLeavesDraft() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
-		CampaignVersion pending = moveTo(tenant, v1.getId(), CampaignVersionStatus.PENDING_APPROVAL);
+		CampaignVersion pending = moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.PENDING_APPROVAL);
 
 		assertThatThrownBy(() -> TenantContext.callAs(tenant,
 				() -> service.editDraft(pending.getId(), pending.getVersion(), V2)))
@@ -130,9 +134,9 @@ class CampaignServiceTest {
 
 	@Test
 	void databaseRejectsContentChangesOnAFrozenVersionEvenOutsideJpa() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
 		assertThatThrownBy(() -> jdbc.update(
 				"update campaign_version set raw_definition = '{}'::jsonb where id = ?", v1.getId()))
@@ -150,10 +154,10 @@ class CampaignServiceTest {
 
 	@Test
 	void frozenVersionCannotGoBackToDraftOrHaveItsCapsChanged() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		addCounterDef(tenant, v1.getId(), 100);
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
 		assertThatThrownBy(() -> jdbc.update(
 				"update campaign_version set status = 'DRAFT' where id = ?", v1.getId()))
@@ -161,19 +165,17 @@ class CampaignServiceTest {
 		assertThatThrownBy(() -> jdbc.update(
 				"update counter_def set cap = 1000000 where campaign_version_id = ?", v1.getId()))
 				.hasMessageContaining("frozen");
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> {
-			CounterDef extra = new CounterDef();
-			extra.setCampaignVersionId(v1.getId());
-			return counterDefs.saveAndFlush(fill(extra, "extra", 5));
-		})).hasMessageContaining("frozen");
+		assertThatThrownBy(() -> TenantContext.callAs(tenant,
+				() -> counterDefs.saveAndFlush(CounterDef.define(v1.getId(), limit("extra", 5), 1))))
+				.hasMessageContaining("frozen");
 	}
 
 	@Test
 	void rowsCannotBeMovedOutOfAFrozenVersionNorTheVersionRenumbered() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		addCounterDef(tenant, v1.getId(), 100);
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 		CampaignVersion v2 = TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId()));
 
 		assertThatThrownBy(() -> jdbc.update(
@@ -197,14 +199,12 @@ class CampaignServiceTest {
 
 	@Test
 	void concurrentChildWritesThenVersionUpdatesDoNotDeadlock() throws Exception {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		TransactionTemplate tx = new TransactionTemplate(txManager);
 		List<Callable<Integer>> writers = IntStream.range(0, 10)
 				.<Callable<Integer>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> tx.execute(status -> {
-					CounterDef def = new CounterDef();
-					def.setCampaignVersionId(v1.getId());
-					counterDefs.saveAndFlush(fill(def, "quota-" + i, 10));
+					counterDefs.saveAndFlush(CounterDef.define(v1.getId(), limit("quota_" + i, 10), i));
 					return jdbc.update("update campaign_version set optional_script = ? where id = ?",
 							"writer " + i, v1.getId());
 				})))
@@ -217,7 +217,7 @@ class CampaignServiceTest {
 
 	@Test
 	void newVersionLockDoesNotBlockCounterInsertsForTheCampaign() throws Exception {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 		try {
@@ -242,10 +242,10 @@ class CampaignServiceTest {
 
 	@Test
 	void openDraftCarriesCounterLimitsForward() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		addCounterDef(tenant, v1.getId(), 100);
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
 		CampaignVersion v2 = TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId()));
 
@@ -262,10 +262,10 @@ class CampaignServiceTest {
 
 	@Test
 	void rolledBackOpenDraftLeavesNoDraftOrCopiedLimitsBehind() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		addCounterDef(tenant, v1.getId(), 100);
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
 		UUID draftId = TenantContext.callAs(tenant, () -> new TransactionTemplate(txManager).execute(tx -> {
 			UUID id = service.openDraft(v1.getCampaignId()).getId();
@@ -280,7 +280,7 @@ class CampaignServiceTest {
 
 	@Test
 	void blankOrOverlongNameIsRejectedWithACode() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 
 		assertRejected(tenant, () -> service.create("   ", V1), "CAMPAIGN_NAME_INVALID");
 		assertRejected(tenant, () -> service.create("x".repeat(201), V1), "CAMPAIGN_NAME_INVALID");
@@ -288,7 +288,7 @@ class CampaignServiceTest {
 
 	@Test
 	void unchangedSaveDoesNotBumpVersion() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V2));
 
 		CampaignVersion saved = TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), V2));
@@ -297,11 +297,109 @@ class CampaignServiceTest {
 	}
 
 	@Test
+	void resaveInAnotherSpellingIsStoredCanonicallyAndDoesNotBumpVersion() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V2));
+		// same definition, other key order and spacing
+		DraftContent respelled = new DraftContent("""
+				{ "conditions" : [ { "value":"GOLD","attr":"segment","op":"=" } ] }""",
+				V2.optionalScript(), V2.channels());
+
+		CampaignVersion saved = TenantContext.callAs(tenant,
+				() -> service.editDraft(v1.getId(), v1.getVersion(), respelled));
+
+		assertThat(saved.getVersion()).isEqualTo(v1.getVersion());
+		assertThat(saved.getRawDefinition()).isEqualTo(V2.rawDefinition());
+	}
+
+	@Test
+	void invalidDefinitionIsRejectedWithEveryViolationAndNothingIsWritten() {
+		UUID tenant = newTenant(tenants);
+		DraftContent invalid = new DraftContent(
+				"{\"conditions\": [{\"attr\": \"segment\"}], \"counters\": []}", null, Set.of());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", invalid)))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+					assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
+					assertThat(e.getDetails()).hasSize(2).anyMatch(d -> d.startsWith("counters:"))
+							.anyMatch(d -> d.startsWith("conditions[0].op:"));
+				});
+		assertThat(TenantContext.callAs(tenant, () -> service.list(Pageable.unpaged()))).isEmpty();
+
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		assertRejected(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), invalid), "RULE_DEFINITION_INVALID");
+		assertThat(TenantContext.callAs(tenant, () -> service.getVersion(v1.getId())).getVersion())
+				.isEqualTo(v1.getVersion());
+	}
+
+	@Test
+	void jsonThatJsonbCannotStoreIsAValidationErrorNotADatabaseError() {
+		UUID tenant = newTenant(tenants);
+		DraftContent nul = new DraftContent("{\"vars\": {\"x\": \"a\\u0000b\"}}", null, Set.of());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", nul)))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+					assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
+					assertThat(e.getDetails()).singleElement().asString().startsWith("not storable as jsonb");
+				});
+	}
+
+	@Test
+	void staleOrFrozenVersionIsReportedBeforeSchemaViolations() {
+		UUID tenant = newTenant(tenants);
+		DraftContent invalid = new DraftContent("{\"trigger\": \"AUTO\"}", null, Set.of());
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), 99, invalid)))
+				.isInstanceOf(ObjectOptimisticLockingFailureException.class);
+		CampaignVersion pending = moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.PENDING_APPROVAL);
+		assertRejected(tenant, () -> service.editDraft(pending.getId(), pending.getVersion(), invalid),
+				"VERSION_NOT_EDITABLE");
+		assertRejected(tenant, () -> service.editDraft(UUID.randomUUID(), 0, invalid), "VERSION_NOT_FOUND");
+	}
+
+	@Test
+	void claimDraftBumpsTheVersionOnlyForItsOwnTenant() {
+		UUID owner = newTenant(tenants);
+		UUID other = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(owner, () -> service.create("Campaign", V1));
+		TransactionTemplate tx = new TransactionTemplate(txManager);
+
+		// the bulk UPDATE is filtered on its own, not only by the lookup in front of it
+		assertThatThrownBy(() -> TenantContext.callAs(other,
+				() -> tx.execute(status -> {
+					service.claimDraft(v1);
+					return null;
+				})))
+				.isInstanceOf(ObjectOptimisticLockingFailureException.class);
+		CampaignVersion claimed = TenantContext.callAs(owner, () -> tx.execute(status -> {
+			CampaignVersion version = service.getVersion(v1.getId());
+			service.claimDraft(version);
+			return version;
+		}));
+
+		assertThat(claimed.getVersion()).isEqualTo(v1.getVersion() + 1);
+		assertThat(TenantContext.callAs(owner, () -> service.getVersion(v1.getId())).getVersion())
+				.isEqualTo(v1.getVersion() + 1);
+	}
+
+	@Test
+	void claimDraftRefusesToRunOutsideATransaction() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> {
+			service.claimDraft(v1);
+			return null;
+		})).isInstanceOf(IllegalTransactionStateException.class);
+	}
+
+	@Test
 	void openDraftCopiesLatestVersionAsNextNumber() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		TenantContext.callAs(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), V2));
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 
 		CampaignVersion v2 = TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId()));
 
@@ -314,7 +412,7 @@ class CampaignServiceTest {
 
 	@Test
 	void secondOpenDraftIsRejectedWhileOneIsOpen() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 
 		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId())))
@@ -324,7 +422,7 @@ class CampaignServiceTest {
 
 	@Test
 	void databaseRejectsASecondDraftEvenIfTheServiceIsBypassed() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		CampaignVersion bypass = new CampaignVersion();
 		bypass.setCampaignId(v1.getCampaignId());
@@ -337,7 +435,7 @@ class CampaignServiceTest {
 
 	@Test
 	void concurrentEditsOfTheSameVersionProduceOneWinner() throws Exception {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
 		List<Callable<CampaignVersion>> editors = IntStream.range(0, 10)
 				.<Callable<CampaignVersion>>mapToObj(i -> () -> TenantContext.callAs(tenant,
@@ -353,9 +451,9 @@ class CampaignServiceTest {
 
 	@Test
 	void concurrentOpenDraftCreatesExactlyOneDraft() throws Exception {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
-		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+		moveTo(versions, tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
 		List<Callable<CampaignVersion>> openers = IntStream.range(0, 10)
 				.<Callable<CampaignVersion>>mapToObj(i -> () -> TenantContext.callAs(tenant,
 						() -> service.openDraft(v1.getCampaignId())))
@@ -372,8 +470,8 @@ class CampaignServiceTest {
 
 	@Test
 	void anotherTenantCannotSeeOrChangeTheCampaign() {
-		UUID owner = newTenant();
-		UUID other = newTenant();
+		UUID owner = newTenant(tenants);
+		UUID other = newTenant(tenants);
 		CampaignVersion v1 = TenantContext.callAs(owner, () -> service.create("Campaign", V1));
 
 		assertThat(TenantContext.callAs(other, () -> service.list(Pageable.unpaged()))).isEmpty();
@@ -400,61 +498,11 @@ class CampaignServiceTest {
 	}
 
 	private void addCounterDef(UUID tenant, UUID versionId, long cap) {
-		TenantContext.callAs(tenant, () -> {
-			CounterDef def = new CounterDef();
-			def.setCampaignVersionId(versionId);
-			return counterDefs.saveAndFlush(fill(def, "quota", cap));
-		});
+		TenantContext.callAs(tenant, () -> counterDefs.saveAndFlush(CounterDef.define(versionId, limit("quota", cap), 0)));
 	}
 
-	private static CounterDef fill(CounterDef def, String name, long cap) {
-		def.setName(name);
-		def.setScope(CounterScope.CAMPAIGN);
-		def.setUnit(CounterUnit.COUNT);
-		def.setPeriod(CounterPeriod.CAMPAIGN);
-		def.setMode(CounterMode.ALL_OR_NOTHING);
-		def.setCap(cap);
-		def.setSortOrder(0);
-		return def;
-	}
-
-	private static void assertRejected(UUID tenant, ScopedValue.CallableOp<?, RuntimeException> op, String code) {
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, op))
-				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getCode()).isEqualTo(code));
-	}
-
-	/** Runs every caller concurrently; returns the failures (one success expected per test). */
-	private static <T> List<Throwable> race(List<Callable<T>> callers) throws InterruptedException {
-		List<Throwable> failures = new ArrayList<>();
-		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-			for (Future<T> result : executor.invokeAll(callers)) {
-				try {
-					result.get();
-				} catch (ExecutionException e) {
-					failures.add(e.getCause());
-				}
-			}
-		}
-		return failures;
-	}
-
-	/** Stands in for the approval flow (M7), which doesn't exist yet. */
-	private CampaignVersion moveTo(UUID tenant, UUID versionId, CampaignVersionStatus status) {
-		return TenantContext.callAs(tenant, () -> {
-			CampaignVersion version = versions.findById(versionId).orElseThrow();
-			version.setStatus(status);
-			version.setApprovedBy("checker");
-			version.setApprovedAt(Instant.now());
-			return versions.saveAndFlush(version);
-		});
-	}
-
-	private UUID newTenant() {
-		Tenant tenant = new Tenant();
-		tenant.setCode("t-" + UUID.randomUUID());
-		tenant.setName("Test tenant");
-		tenant.setTimeZone("UTC");
-		tenant.setCurrency("IDR");
-		return tenants.save(tenant).getId();
+	private static CounterLimit limit(String name, long cap) {
+		return new CounterLimit(name, CounterScope.CAMPAIGN, CounterUnit.COUNT, CounterPeriod.CAMPAIGN,
+				CounterMode.ALL_OR_NOTHING, cap);
 	}
 }

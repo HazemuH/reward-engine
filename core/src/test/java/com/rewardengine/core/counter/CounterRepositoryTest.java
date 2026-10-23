@@ -1,5 +1,6 @@
 package com.rewardengine.core.counter;
 
+import static com.rewardengine.core.TestSupport.newTenant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -8,7 +9,6 @@ import com.rewardengine.core.TestcontainersConfiguration;
 import com.rewardengine.core.campaign.Campaign;
 import com.rewardengine.core.campaign.CampaignRepository;
 import com.rewardengine.core.campaign.CampaignStatus;
-import com.rewardengine.core.tenant.Tenant;
 import com.rewardengine.core.tenant.TenantRepository;
 import java.util.List;
 import java.util.UUID;
@@ -38,7 +38,7 @@ class CounterRepositoryTest {
 
 	@Test
 	void consumesUpToCapAndRejectsBeyondIt() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		UUID counter = newCounter(tenant, CampaignStatus.ACTIVE).getId();
 
 		assertThat(consume(tenant, counter, 3, 5)).isOne();
@@ -49,7 +49,7 @@ class CounterRepositoryTest {
 
 	@Test
 	void killSwitchStopsConsumptionEvenWithCapLeft() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		UUID stopped = newCounter(tenant, CampaignStatus.STOPPED).getId();
 		UUID paused = newCounter(tenant, CampaignStatus.PAUSED).getId();
 
@@ -60,8 +60,8 @@ class CounterRepositoryTest {
 
 	@Test
 	void anotherTenantCannotSeeOrConsumeTheCounter() {
-		UUID owner = newTenant();
-		UUID other = newTenant();
+		UUID owner = newTenant(tenants);
+		UUID other = newTenant(tenants);
 		UUID counter = newCounter(owner, CampaignStatus.ACTIVE).getId();
 
 		assertThat(TenantContext.callAs(other, () -> counters.findById(counter))).isEmpty();
@@ -71,7 +71,7 @@ class CounterRepositoryTest {
 
 	@Test
 	void staleEntityCannotWriteBackOldUsage() {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		Counter stale = newCounter(tenant, CampaignStatus.ACTIVE);
 
 		assertThat(consume(tenant, stale.getId(), 1, 10)).isOne();
@@ -83,7 +83,7 @@ class CounterRepositoryTest {
 
 	@Test
 	void concurrentCallersNeverExceedCap() throws Exception {
-		UUID tenant = newTenant();
+		UUID tenant = newTenant(tenants);
 		UUID counter = newCounter(tenant, CampaignStatus.ACTIVE).getId();
 		List<Callable<Integer>> callers = IntStream.range(0, 20)
 				.<Callable<Integer>>mapToObj(i -> () -> consume(tenant, counter, 1, 10))
@@ -106,15 +106,6 @@ class CounterRepositoryTest {
 		campaign.setName("no tenant bound");
 
 		assertThatThrownBy(() -> campaigns.save(campaign)).isInstanceOf(DataIntegrityViolationException.class);
-	}
-
-	private UUID newTenant() {
-		Tenant tenant = new Tenant();
-		tenant.setCode("t-" + UUID.randomUUID());
-		tenant.setName("Test tenant");
-		tenant.setTimeZone("UTC");
-		tenant.setCurrency("IDR");
-		return tenants.save(tenant).getId();
 	}
 
 	private Counter newCounter(UUID tenant, CampaignStatus status) {

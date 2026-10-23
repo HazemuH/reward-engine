@@ -45,7 +45,11 @@ public class CampaignVersion extends TenantScopedEntity {
 	@Column(nullable = false)
 	private CampaignVersionStatus status = CampaignVersionStatus.DRAFT;
 
-	/** conditions, benefits, vars, content (id/en) — validated against a schema before submit. */
+	/**
+	 * conditions, benefits, vars, content — schema-checked and stored in jsonb's
+	 * canonical text on every save (RuleDefinitionValidator). Counter limits are
+	 * not in here; they live in counter_def.
+	 */
 	@Setter(AccessLevel.NONE)
 	@JdbcTypeCode(SqlTypes.JSON)
 	@Column(nullable = false)
@@ -71,15 +75,20 @@ public class CampaignVersion extends TenantScopedEntity {
 	 * no matter which service holds the entity.
 	 */
 	public void editDraft(DraftContent content) {
+		requireDraft();
+		rawDefinition = content.rawDefinition();
+		optionalScript = content.optionalScript();
+		// retain+add rather than clear+add: unchanged channels stay clean and don't bump @Version.
+		// rawDefinition stays clean too: CampaignService hands it over in jsonb's canonical form.
+		channels.retainAll(content.channels());
+		channels.addAll(content.channels());
+	}
+
+	/** Version content, including rows owned by other features (counter limits), is writable only while DRAFT. */
+	public void requireDraft() {
 		if (status != CampaignVersionStatus.DRAFT) {
 			throw new BusinessRuleException("VERSION_NOT_EDITABLE",
 					"Version " + versionNumber + " is " + status + "; changes go into a new draft version");
 		}
-		rawDefinition = content.rawDefinition();
-		optionalScript = content.optionalScript();
-		// retain+add rather than clear+add: unchanged channels stay clean and don't bump @Version.
-		// rawDefinition only stays clean if sent in jsonb's canonical form — RE-011 canonicalizes it.
-		channels.retainAll(content.channels());
-		channels.addAll(content.channels());
 	}
 }

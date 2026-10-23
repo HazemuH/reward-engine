@@ -7,8 +7,9 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.util.UUID;
+import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
+import lombok.NoArgsConstructor;
 
 /**
  * A limit as approved in one campaign version: the single source of truth for
@@ -18,9 +19,12 @@ import lombok.Setter;
  *
  * sortOrder is the evaluation order — a PARTIAL counter shrinks the amount
  * offered to the counters after it.
+ *
+ * No setters: a draft's limits change only by being replaced as a whole through
+ * {@link CounterDefService}, so a loaded row can't be edited in place.
  */
 @Getter
-@Setter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "counter_def")
 public class CounterDef extends TenantScopedEntity {
@@ -53,17 +57,22 @@ public class CounterDef extends TenantScopedEntity {
 	@Column(nullable = false)
 	private int sortOrder;
 
+	/** Not validated here: CounterDefService checks a whole list before defining any of it. */
+	public static CounterDef define(UUID campaignVersionId, CounterLimit limit, int sortOrder) {
+		CounterDef def = new CounterDef();
+		def.campaignVersionId = campaignVersionId;
+		def.name = limit.name();
+		def.scope = limit.scope();
+		def.unit = limit.unit();
+		def.period = limit.period();
+		def.mode = limit.mode();
+		def.cap = limit.cap();
+		def.sortOrder = sortOrder;
+		return def;
+	}
+
 	/** Same limit, owned by another (draft) version — how a new version starts from the previous one. */
 	public CounterDef copyFor(UUID targetVersionId) {
-		CounterDef copy = new CounterDef();
-		copy.campaignVersionId = targetVersionId;
-		copy.name = name;
-		copy.scope = scope;
-		copy.unit = unit;
-		copy.period = period;
-		copy.mode = mode;
-		copy.cap = cap;
-		copy.sortOrder = sortOrder;
-		return copy;
+		return define(targetVersionId, CounterLimit.of(this), sortOrder);
 	}
 }
