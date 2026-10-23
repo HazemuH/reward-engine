@@ -52,4 +52,18 @@ public class CounterDef extends TenantScopedEntity {
 
 	@Column(nullable = false)
 	private int sortOrder;
+
+	/** Same limit, owned by another (draft) version — how a new version starts from the previous one. */
+	public CounterDef copyFor(UUID targetVersionId) {
+		CounterDef copy = new CounterDef();
+		copy.campaignVersionId = targetVersionId;
+		copy.name = name;
+		copy.scope = scope;
+		copy.unit = unit;
+		copy.period = period;
+		copy.mode = mode;
+		copy.cap = cap;
+		copy.sortOrder = sortOrder;
+		return copy;
+	}
 }

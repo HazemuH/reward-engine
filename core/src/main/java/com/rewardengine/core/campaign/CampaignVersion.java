@@ -1,6 +1,7 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.audit.TenantScopedEntity;
+import com.rewardengine.common.error.BusinessRuleException;
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
@@ -13,6 +14,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -44,14 +46,17 @@ public class CampaignVersion extends TenantScopedEntity {
 	private CampaignVersionStatus status = CampaignVersionStatus.DRAFT;
 
 	/** conditions, benefits, vars, content (id/en) — validated against a schema before submit. */
+	@Setter(AccessLevel.NONE)
 	@JdbcTypeCode(SqlTypes.JSON)
 	@Column(nullable = false)
 	private String rawDefinition;
 
 	/** Optional rule script source; null for data-only rules (most of them). */
+	@Setter(AccessLevel.NONE)
 	@Column(columnDefinition = "text")
 	private String optionalScript;
 
+	@Setter(AccessLevel.NONE)
 	@ElementCollection
 	@CollectionTable(name = "campaign_version_channel", joinColumns = @JoinColumn(name = "campaign_version_id"))
 	@Column(name = "channel", nullable = false)
@@ -60,4 +65,21 @@ public class CampaignVersion extends TenantScopedEntity {
 	private String approvedBy;
 
 	private Instant approvedAt;
+
+	/**
+	 * The only write path for rule content, so "frozen once it leaves DRAFT" holds
+	 * no matter which service holds the entity.
+	 */
+	public void editDraft(DraftContent content) {
+		if (status != CampaignVersionStatus.DRAFT) {
+			throw new BusinessRuleException("VERSION_NOT_EDITABLE",
+					"Version " + versionNumber + " is " + status + "; changes go into a new draft version");
+		}
+		rawDefinition = content.rawDefinition();
+		optionalScript = content.optionalScript();
+		// retain+add rather than clear+add: unchanged channels stay clean and don't bump @Version.
+		// rawDefinition only stays clean if sent in jsonb's canonical form — RE-011 canonicalizes it.
+		channels.retainAll(content.channels());
+		channels.addAll(content.channels());
+	}
 }

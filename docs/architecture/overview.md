@@ -79,6 +79,15 @@ Rejections carry a descriptive code; callers switch on the code, not on HTTP sta
 | `QUOTE_EXPIRED` | Quote older than its TTL, or the transaction changed since it was quoted |
 | `RATE_LIMITED` | Too many attempts in the rate-limit window |
 
+Admin-side codes (campaign authoring):
+
+| Code | Meaning |
+|---|---|
+| `CAMPAIGN_NOT_FOUND` / `VERSION_NOT_FOUND` | No such campaign/version for the caller's tenant |
+| `VERSION_NOT_EDITABLE` | Version has left DRAFT; its content is frozen, changes go into a new draft |
+| `DRAFT_ALREADY_OPEN` | Campaign already has an open draft version (one at a time) |
+| `CAMPAIGN_NAME_INVALID` | Campaign name blank or longer than 200 characters |
+
 ## What's intentionally not built yet
 
 - `reward-gateway` / LDAP / JWT admin auth — see `docs/decisions/open-decisions.md` #2.
