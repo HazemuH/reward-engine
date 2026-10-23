@@ -37,6 +37,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -69,6 +70,9 @@ class CampaignServiceTest {
 
 	@Autowired
 	PlatformTransactionManager txManager;
+
+	@Autowired
+	VersionCarryOver carryOver;
 
 	@Autowired
 	JdbcTemplate jdbc;
@@ -258,6 +262,15 @@ class CampaignServiceTest {
 		});
 		assertThat(TenantContext.callAs(tenant,
 				() -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(v1.getId()))).hasSize(1);
+	}
+
+	@Test
+	void carryOverRefusesToRunOutsideTheDraftTransaction() {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+
+		assertThatThrownBy(() -> TenantContext.runAs(tenant, () -> carryOver.carryOver(v1.getId(), UUID.randomUUID())))
+				.isInstanceOf(IllegalTransactionStateException.class);
 	}
 
 	@Test

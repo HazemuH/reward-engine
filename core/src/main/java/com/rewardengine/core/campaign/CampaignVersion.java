@@ -23,8 +23,8 @@ import org.hibernate.type.SqlTypes;
 /**
  * One version of a campaign's rules. Content is frozen once it leaves DRAFT —
  * a change is a new version, never an edit (architecture overview, "Rules are
- * never overwritten"). Counter limits live in {@link com.rewardengine.core.counter.CounterDef}
- * rows owned by this version.
+ * never overwritten"). Counter limits live in {@code counter_def} rows owned by
+ * this version, carried into new drafts through {@link VersionCarryOver}.
  *
  * approvedBy/approvedAt are required from APPROVED onward (DB check constraint),
  * and the approver must differ from the author (enforced in the approval service).
