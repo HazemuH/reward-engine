@@ -15,6 +15,10 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+          # multi-row writes (snapshot loads) go out in batches, not one round trip per row
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
   flyway:
     locations: classpath:db/migration
   data:
