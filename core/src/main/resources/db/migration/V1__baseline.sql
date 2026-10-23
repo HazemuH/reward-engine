@@ -86,12 +86,18 @@ create unique index uq_campaign_version_draft
     on campaign_version (campaign_id) where status = 'DRAFT';
 
 -- Rule content is frozen once a version leaves DRAFT (a change is a new
--- version). The entity enforces this too; this catches native SQL and any
--- path that flips status back first.
+-- version). The entity enforces this too; this catches native SQL, and
+-- refusing the way back to DRAFT closes "flip status, then edit".
+--
+-- The child-table triggers below (channels, counter_def) check the parent's
+-- status at the time each row is written. Hibernate flushes the parent UPDATE
+-- before collection rows, so a flow that edits a draft and moves it out of
+-- DRAFT in one transaction must flush the edit first (CampaignService.editDraft does).
 create function reject_frozen_version_content() returns trigger as $$
 begin
     if old.status <> 'DRAFT'
-       and (new.raw_definition is distinct from old.raw_definition
+       and (new.status = 'DRAFT'
+            or new.raw_definition is distinct from old.raw_definition
             or new.optional_script is distinct from old.optional_script) then
         raise exception 'campaign_version % is %; its content is frozen', old.id, old.status;
     end if;
@@ -109,12 +115,13 @@ create table campaign_version_channel (
     primary key (campaign_version_id, channel)
 );
 
-create function reject_frozen_version_channel() returns trigger as $$
+-- Shared by every table whose rows are part of a version's content.
+create function reject_frozen_version_child() returns trigger as $$
 declare
     version_id uuid := coalesce(new.campaign_version_id, old.campaign_version_id);
 begin
     if exists (select 1 from campaign_version where id = version_id and status <> 'DRAFT') then
-        raise exception 'campaign_version % has left DRAFT; its channels are frozen', version_id;
+        raise exception 'campaign_version % has left DRAFT; its % rows are frozen', version_id, tg_table_name;
     end if;
     return coalesce(new, old);
 end;
@@ -122,7 +129,7 @@ $$ language plpgsql;
 
 create trigger trg_campaign_version_channel_frozen
     before insert or update or delete on campaign_version_channel
-    for each row execute function reject_frozen_version_channel();
+    for each row execute function reject_frozen_version_child();
 
 -- Limits as approved in one version: the only place cap/unit/mode live.
 create table counter_def (
@@ -143,6 +150,11 @@ create table counter_def (
     updated_by varchar(100),
     unique (campaign_version_id, name)
 );
+
+-- The approved cap is version content too: frozen with its version.
+create trigger trg_counter_def_frozen
+    before insert or update or delete on counter_def
+    for each row execute function reject_frozen_version_child();
 
 -- Usage per (campaign, name, scope key, period key), carried across versions.
 -- `used` only moves through the conditional UPDATE in CounterRepository.

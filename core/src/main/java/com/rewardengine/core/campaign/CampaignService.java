@@ -1,6 +1,8 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.core.counter.CounterDef;
+import com.rewardengine.core.counter.CounterDefRepository;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -21,12 +23,17 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class CampaignService {
 
+	private static final int MAX_NAME_LENGTH = 200;
+
 	private final CampaignRepository campaigns;
 	private final CampaignVersionRepository versions;
+	private final CounterDefRepository counterDefs;
 
-	public CampaignService(CampaignRepository campaigns, CampaignVersionRepository versions) {
+	public CampaignService(CampaignRepository campaigns, CampaignVersionRepository versions,
+			CounterDefRepository counterDefs) {
 		this.campaigns = campaigns;
 		this.versions = versions;
+		this.counterDefs = counterDefs;
 	}
 
 	/** New campaign in DRAFT with its first version (v1) as an open draft. */
@@ -54,35 +61,42 @@ public class CampaignService {
 	}
 
 	public CampaignVersion getVersion(UUID versionId) {
-		return versions.findById(versionId).orElseThrow(() -> new BusinessRuleException(
-				"VERSION_NOT_FOUND", "Campaign version " + versionId + " not found"));
+		return versions.findById(versionId).orElseThrow(() -> versionNotFound(versionId));
 	}
 
 	/** The name is an internal label, not rule content, so it stays editable in any status. */
 	@Transactional
 	public Campaign rename(UUID campaignId, long expectedVersion, String name) {
+		String validName = requireName(name);
 		Campaign campaign = get(campaignId);
 		checkVersion(Campaign.class, campaignId, expectedVersion, campaign.getVersion());
-		campaign.setName(requireName(name));
+		campaign.setName(validName);
 		return campaigns.saveAndFlush(campaign);
 	}
 
 	/**
-	 * Opens v+1 as a DRAFT, starting from the latest version's content whatever
-	 * its status — after a rejection that's the content being revised, and the
-	 * approver reviews the new version in full anyway. One open draft per
-	 * campaign; the partial unique index backs this up if the check is ever bypassed.
+	 * Opens v+1 as a DRAFT, starting from the latest version's content and
+	 * counter limits whatever its status — after a rejection that's the content
+	 * being revised, and the approver reviews the new version in full anyway.
+	 *
+	 * One open draft per campaign. Only this method creates v2+, and it refuses
+	 * while a draft is open, so an open draft is always the latest version; the
+	 * partial unique index backs this up if that ever stops being true.
 	 */
 	@Transactional
 	public CampaignVersion openDraft(UUID campaignId) {
 		campaigns.findForUpdate(campaignId).orElseThrow(() -> campaignNotFound(campaignId));
-		if (versions.existsByCampaignIdAndStatus(campaignId, CampaignVersionStatus.DRAFT)) {
+		CampaignVersion latest = versions.findFirstByCampaignIdOrderByVersionNumberDesc(campaignId).orElseThrow();
+		if (latest.getStatus() == CampaignVersionStatus.DRAFT) {
 			throw new BusinessRuleException("DRAFT_ALREADY_OPEN",
 					"Campaign " + campaignId + " already has an open draft version");
 		}
-		CampaignVersion latest = versions.findFirstByCampaignIdOrderByVersionNumberDesc(campaignId).orElseThrow();
-		return versions.saveAndFlush(
+		CampaignVersion draft = versions.saveAndFlush(
 				newVersion(campaignId, latest.getVersionNumber() + 1, DraftContent.copyOf(latest)));
+		counterDefs.saveAll(counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(latest.getId()).stream()
+				.map(def -> def.copyFor(draft.getId()))
+				.toList());
+		return draft;
 	}
 
 	@Transactional
@@ -108,13 +122,19 @@ public class CampaignService {
 	}
 
 	private static String requireName(String name) {
-		if (name == null || name.isBlank()) {
-			throw new IllegalArgumentException("Campaign name must not be blank");
+		String stripped = name == null ? "" : name.strip();
+		if (stripped.isEmpty() || stripped.length() > MAX_NAME_LENGTH) {
+			throw new BusinessRuleException("CAMPAIGN_NAME_INVALID",
+					"Campaign name must be 1-" + MAX_NAME_LENGTH + " characters");
 		}
-		return name.strip();
+		return stripped;
 	}
 
 	private static BusinessRuleException campaignNotFound(UUID campaignId) {
 		return new BusinessRuleException("CAMPAIGN_NOT_FOUND", "Campaign " + campaignId + " not found");
+	}
+
+	private static BusinessRuleException versionNotFound(UUID versionId) {
+		return new BusinessRuleException("VERSION_NOT_FOUND", "Campaign version " + versionId + " not found");
 	}
 }

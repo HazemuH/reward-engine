@@ -86,6 +86,7 @@ Admin-side codes (campaign authoring):
 | `CAMPAIGN_NOT_FOUND` / `VERSION_NOT_FOUND` | No such campaign/version for the caller's tenant |
 | `VERSION_NOT_EDITABLE` | Version has left DRAFT; its content is frozen, changes go into a new draft |
 | `DRAFT_ALREADY_OPEN` | Campaign already has an open draft version (one at a time) |
+| `CAMPAIGN_NAME_INVALID` | Campaign name blank or longer than 200 characters |
 
 ## What's intentionally not built yet
 

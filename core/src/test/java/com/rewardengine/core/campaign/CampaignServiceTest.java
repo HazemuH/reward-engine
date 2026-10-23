@@ -6,6 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.common.tenant.TenantContext;
 import com.rewardengine.core.TestcontainersConfiguration;
+import com.rewardengine.core.counter.CounterDef;
+import com.rewardengine.core.counter.CounterDefRepository;
+import com.rewardengine.core.counter.CounterMode;
+import com.rewardengine.core.counter.CounterPeriod;
+import com.rewardengine.core.counter.CounterScope;
+import com.rewardengine.core.counter.CounterUnit;
 import com.rewardengine.core.tenant.Tenant;
 import com.rewardengine.core.tenant.TenantRepository;
 import java.time.Instant;
@@ -44,6 +50,9 @@ class CampaignServiceTest {
 
 	@Autowired
 	CampaignVersionRepository versions;
+
+	@Autowired
+	CounterDefRepository counterDefs;
 
 	@Autowired
 	JdbcTemplate jdbc;
@@ -121,6 +130,54 @@ class CampaignServiceTest {
 		assertThatThrownBy(() -> jdbc.update(
 				"delete from campaign_version_channel where campaign_version_id = ?", v1.getId()))
 				.hasMessageContaining("frozen");
+	}
+
+	@Test
+	void frozenVersionCannotGoBackToDraftOrHaveItsCapsChanged() {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		addCounterDef(tenant, v1.getId(), 100);
+		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+
+		assertThatThrownBy(() -> jdbc.update(
+				"update campaign_version set status = 'DRAFT' where id = ?", v1.getId()))
+				.hasMessageContaining("frozen");
+		assertThatThrownBy(() -> jdbc.update(
+				"update counter_def set cap = 1000000 where campaign_version_id = ?", v1.getId()))
+				.hasMessageContaining("frozen");
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> {
+			CounterDef extra = new CounterDef();
+			extra.setCampaignVersionId(v1.getId());
+			return counterDefs.saveAndFlush(fill(extra, "extra", 5));
+		})).hasMessageContaining("frozen");
+	}
+
+	@Test
+	void openDraftCarriesCounterLimitsForward() {
+		UUID tenant = newTenant();
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		addCounterDef(tenant, v1.getId(), 100);
+		moveTo(tenant, v1.getId(), CampaignVersionStatus.ACTIVE);
+
+		CampaignVersion v2 = TenantContext.callAs(tenant, () -> service.openDraft(v1.getCampaignId()));
+
+		List<CounterDef> copied = TenantContext.callAs(tenant,
+				() -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(v2.getId()));
+		assertThat(copied).singleElement().satisfies(def -> {
+			assertThat(def.getName()).isEqualTo("quota");
+			assertThat(def.getCap()).isEqualTo(100);
+			assertThat(def.getMode()).isEqualTo(CounterMode.ALL_OR_NOTHING);
+		});
+		assertThat(TenantContext.callAs(tenant,
+				() -> counterDefs.findByCampaignVersionIdOrderBySortOrderAsc(v1.getId()))).hasSize(1);
+	}
+
+	@Test
+	void blankOrOverlongNameIsRejectedWithACode() {
+		UUID tenant = newTenant();
+
+		assertRejected(tenant, () -> service.create("   ", V1), "CAMPAIGN_NAME_INVALID");
+		assertRejected(tenant, () -> service.create("x".repeat(201), V1), "CAMPAIGN_NAME_INVALID");
 	}
 
 	@Test
@@ -214,16 +271,35 @@ class CampaignServiceTest {
 		CampaignVersion v1 = TenantContext.callAs(owner, () -> service.create("Campaign", V1));
 
 		assertThat(TenantContext.callAs(other, () -> service.list(Pageable.unpaged()))).isEmpty();
-		assertNotFound(other, () -> service.get(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
-		assertNotFound(other, () -> service.versions(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
-		assertNotFound(other, () -> service.rename(v1.getCampaignId(), 0, "hijacked"), "CAMPAIGN_NOT_FOUND");
-		assertNotFound(other, () -> service.openDraft(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
-		assertNotFound(other, () -> service.editDraft(v1.getId(), v1.getVersion(), V2), "VERSION_NOT_FOUND");
+		assertRejected(other, () -> service.get(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
+		assertRejected(other, () -> service.versions(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
+		assertRejected(other, () -> service.rename(v1.getCampaignId(), 0, "hijacked"), "CAMPAIGN_NOT_FOUND");
+		assertRejected(other, () -> service.openDraft(v1.getCampaignId()), "CAMPAIGN_NOT_FOUND");
+		assertRejected(other, () -> service.editDraft(v1.getId(), v1.getVersion(), V2), "VERSION_NOT_FOUND");
 		assertThat(TenantContext.callAs(owner, () -> service.getVersion(v1.getId())).getRawDefinition())
 				.isEqualTo(V1.rawDefinition());
 	}
 
-	private static void assertNotFound(UUID tenant, ScopedValue.CallableOp<?, RuntimeException> op, String code) {
+	private void addCounterDef(UUID tenant, UUID versionId, long cap) {
+		TenantContext.callAs(tenant, () -> {
+			CounterDef def = new CounterDef();
+			def.setCampaignVersionId(versionId);
+			return counterDefs.saveAndFlush(fill(def, "quota", cap));
+		});
+	}
+
+	private static CounterDef fill(CounterDef def, String name, long cap) {
+		def.setName(name);
+		def.setScope(CounterScope.CAMPAIGN);
+		def.setUnit(CounterUnit.COUNT);
+		def.setPeriod(CounterPeriod.CAMPAIGN);
+		def.setMode(CounterMode.ALL_OR_NOTHING);
+		def.setCap(cap);
+		def.setSortOrder(0);
+		return def;
+	}
+
+	private static void assertRejected(UUID tenant, ScopedValue.CallableOp<?, RuntimeException> op, String code) {
 		assertThatThrownBy(() -> TenantContext.callAs(tenant, op))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getCode()).isEqualTo(code));
 	}

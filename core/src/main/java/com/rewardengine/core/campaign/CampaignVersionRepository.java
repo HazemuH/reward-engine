@@ -21,6 +21,4 @@ public interface CampaignVersionRepository extends JpaRepository<CampaignVersion
 
 	/** No entity graph: a collection fetch with a row limit would load every version and limit in memory. */
 	Optional<CampaignVersion> findFirstByCampaignIdOrderByVersionNumberDesc(UUID campaignId);
-
-	boolean existsByCampaignIdAndStatus(UUID campaignId, CampaignVersionStatus status);
 }
