@@ -73,7 +73,17 @@ class AttributeCatalogServiceTest {
 				() -> catalog.define("now", AttributeSource.REQUEST, AttributeDataType.DATETIME, false, null),
 				"ATTRIBUTE_INVALID");
 		assertRejected(tenant,
+				() -> catalog.define("Now", AttributeSource.REQUEST, AttributeDataType.DATETIME, false, null),
+				"ATTRIBUTE_INVALID");
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> catalog.define("customer.tier",
+				AttributeSource.SNAPSHOT, AttributeDataType.STRING, false, "tier\u0000x")))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails())
+						.containsExactly("description: contains characters that can't be stored"));
+		assertRejected(tenant,
 				() -> catalog.define("amount", AttributeSource.SNAPSHOT, AttributeDataType.STRING, false, null),
+				"ATTRIBUTE_ALREADY_DEFINED");
+		assertRejected(tenant,
+				() -> catalog.define("Amount", AttributeSource.SNAPSHOT, AttributeDataType.STRING, false, null),
 				"ATTRIBUTE_ALREADY_DEFINED");
 	}
 

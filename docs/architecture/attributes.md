@@ -8,7 +8,7 @@ Conditions and scripts may only refer to attributes in the tenant's catalog, plu
 
 | Field | Rule |
 |---|---|
-| `name` | Dotted name, e.g. `customer.segment`, at most 100 characters; unique per tenant; built-in names are reserved |
+| `name` | Dotted name, e.g. `customer.segment`, at most 100 characters; unique per tenant regardless of letter case; built-in names are reserved in any letter case |
 | `source` | `REQUEST` (sent by the caller with each request) or `SNAPSHOT` (loaded periodically). No live lookup source: it would put a downstream call on the calculate path |
 | `data_type` | `STRING`, `NUMBER`, `BOOLEAN`, `DATE`, `DATETIME` (dates local to `tenant.time_zone`) |
 | `sensitive` | See below |
@@ -18,17 +18,19 @@ Name, source and type are fixed once defined, because stored values and approved
 
 Built-ins: `now` (`DATETIME`, server time in the tenant's zone — never a time the caller sends).
 
-Submit checks every `conditions[].attr` with `AttributeCatalogService.requireDefined` (`ATTRIBUTE_NOT_DEFINED` lists each unknown name). Saving a draft doesn't, so a draft may name an attribute before it is added.
+`AttributeCatalogService.requireDefined` checks a set of names (`ATTRIBUTE_NOT_DEFINED` lists each unknown one). **Not called yet:** submit (RE-060) is where it runs over every `conditions[].attr`. Saving a draft never will, so a draft may name an attribute before it is added.
 
 ## Sensitive attributes
 
 Flagged in the catalog. A sensitive attribute may be used in **data conditions**, which are reviewed through approval. It never reaches:
 
-| Where | How it's kept out |
-|---|---|
-| Scripts | `CustomerSnapshot.scriptView()` omits it; script facts are built from that view (RE-035), and a script naming one should fail compilation |
-| Logs | `CustomerSnapshot.toString()` masks it (and leaves out the user key); `SnapshotRow.toString()` names attributes only; snapshot validation messages never echo a value |
-| Exports / stored results | Exports (RE-066) and quotes/redemptions (M3) carry no sensitive values |
+| Where | How it's kept out | Status |
+|---|---|---|
+| Scripts | `CustomerSnapshot.scriptView()` omits it; script facts are built from that view, and a script naming one fails compilation | View in place; the script side is RE-035 |
+| Logs | `CustomerSnapshot.toString()` masks it (and leaves out the user key); `SnapshotRow.toString()` names attributes only; validation messages never echo a value; the datasource runs with `logServerErrorDetail=false`, so database errors (which Hibernate logs) carry no row values or bound parameters | In place |
+| Exports / stored results | Exports and quotes/redemptions carry no sensitive values | RE-066, M3 |
+
+This covers `SNAPSHOT` attributes. A `REQUEST` attribute can be flagged too, but request facts don't exist until RE-013/RE-014, which must give them the same two views.
 
 The flag is read when a value is used, not when it is stored, so flagging an attribute protects values that are already loaded.
 
@@ -39,10 +41,12 @@ Whether a tenant may target on sensitive attributes at all is open decision #14.
 Snapshot attributes are loaded in **generations**:
 
 1. `beginLoad()` opens a `LOADING` load.
-2. `append(loadId, rows)` adds rows in batches. A batch is all or nothing: one bad row rejects it with every problem listed (`SNAPSHOT_ROWS_INVALID`), naming row and attribute, never the value. Values are checked against the catalog: unknown or `REQUEST` attributes are refused, types must match, strings are stripped, numbers stay within 30 integer and 20 fraction digits, and a null or blank value means the attribute is absent. At most 10,000 rows per batch. User keys are stripped on write and on read.
-3. `activate(loadId)` makes it `ACTIVE` and supersedes the previous `ACTIVE` load in the same transaction. This is the atomic swap: reads only ever see the `ACTIVE` load, so a half-written load is never served, and a customer missing from the new load has no snapshot. `fail(loadId)` abandons a load.
+2. `append(loadId, rows)` adds rows in batches. A batch is all or nothing: one bad row rejects it with every problem listed (`SNAPSHOT_ROWS_INVALID`), naming row and attribute, never the value. Values are checked against the catalog: unknown or `REQUEST` attributes are refused, types must match, strings are stripped and then at most `reward.snapshot.max-string-length` characters (1,000 by default), numbers stay within 30 integer and 20 fraction digits, and a null or blank value means the attribute is absent. At most 10,000 rows per batch. User keys are stripped on write and on read.
+3. `activate(loadId, expectedRows)` makes it `ACTIVE` and supersedes the previous `ACTIVE` load in the same transaction. This is the atomic swap: reads only ever see the `ACTIVE` load, so a half-written load is never served, and a customer missing from the new load has no snapshot. It must hold exactly `expectedRows` rows — the count the loader read from its source — so an empty (`SNAPSHOT_LOAD_EMPTY`) or truncated (`SNAPSHOT_LOAD_INCOMPLETE`) load never replaces a complete one. `rowCount(loadId)` reports progress while loading. `fail(loadId)` abandons a load.
 
-At most one `ACTIVE` load per tenant (partial unique index). Activations that overlap: one wins, the others roll back with their load still `LOADING`.
+Appends to one load may run in parallel (each takes the load row `FOR SHARE` and inserts in user-key order, so overlapping batches wait instead of deadlocking). Activation takes it `FOR UPDATE`, so it waits for in-flight appends, counts the rows (`rowCount`, recorded at activation), and any append arriving later is refused as `SNAPSHOT_LOAD_NOT_OPEN` — no row joins a serving load uncounted.
+
+At most one `ACTIVE` load per tenant (partial unique index). Activations that overlap: one wins, the others fail with an optimistic-lock conflict (`ObjectOptimisticLockingFailureException`, 409 once the web layer maps it in M7) and roll back, their load still `LOADING`.
 
 `find(userKey)` returns the customer's typed values from the `ACTIVE` load, with `loadedAt` (the load's activation time) so callers can judge staleness; `activeLoad()` gives the "last loaded" time an admin sees.
 

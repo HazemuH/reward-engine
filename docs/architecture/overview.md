@@ -92,6 +92,7 @@ Admin-side codes (campaign authoring):
 | `ATTRIBUTE_NOT_DEFINED` | A rule names attributes that are neither in the catalog nor built in; `details` lists them |
 | `SNAPSHOT_ROWS_INVALID` | A snapshot batch has invalid rows; `details` names each row and attribute, never the value |
 | `SNAPSHOT_LOAD_NOT_FOUND` / `SNAPSHOT_LOAD_NOT_OPEN` | No such load for this tenant, or the load is no longer `LOADING` |
+| `SNAPSHOT_LOAD_EMPTY` / `SNAPSHOT_LOAD_INCOMPLETE` | Activating a load with no rows, or with fewer/more rows than the source had; it would leave customers without a snapshot |
 | `COUNTER_LIMITS_INVALID` | A counter limit is malformed (name, missing field, `PARTIAL` on `COUNT`, cap ≤ 0); `details` lists every violation |
 
 ## What's intentionally not built yet

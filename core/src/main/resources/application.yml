@@ -56,6 +56,8 @@ management:
 reward:
   quote-ttl-minutes: 15
   calculate-rate-limit-per-minute: 10
+  snapshot:
+    max-string-length: 1000
 
 logging:
   level:

@@ -3,6 +3,7 @@ package com.rewardengine.core.attribute;
 import com.rewardengine.common.error.BusinessRuleException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -14,6 +15,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,12 +40,14 @@ public class AttributeSnapshotService {
 	private final SnapshotLoadRepository loads;
 	private final AttributeSnapshotRepository snapshots;
 	private final AttributeDefRepository defs;
+	private final int maxStringLength;
 
 	public AttributeSnapshotService(SnapshotLoadRepository loads, AttributeSnapshotRepository snapshots,
-			AttributeDefRepository defs) {
+			AttributeDefRepository defs, SnapshotProperties properties) {
 		this.loads = loads;
 		this.snapshots = snapshots;
 		this.defs = defs;
+		this.maxStringLength = properties.maxStringLength();
 	}
 
 	@Transactional
@@ -58,7 +62,7 @@ public class AttributeSnapshotService {
 	 */
 	@Transactional
 	public SnapshotLoad append(UUID loadId, List<SnapshotRow> rows) {
-		SnapshotLoad load = getLoad(loadId);
+		SnapshotLoad load = loads.lockForAppend(loadId).orElseThrow(() -> loadNotFound(loadId));
 		load.requireLoading();
 		if (rows.size() > MAX_BATCH_ROWS) {
 			String problem = "rows: at most " + MAX_BATCH_ROWS + " per batch";
@@ -76,8 +80,9 @@ public class AttributeSnapshotService {
 				continue;
 			}
 			String userKey = userKey(row.userKey());
-			if (userKey.isEmpty() || userKey.length() > MAX_USER_KEY_LENGTH) {
-				violations.add(path + ".userKey: required, at most " + MAX_USER_KEY_LENGTH + " characters");
+			if (userKey.isEmpty() || userKey.codePointCount(0, userKey.length()) > MAX_USER_KEY_LENGTH
+					|| !StorableText.isStorable(userKey)) {
+				violations.add(path + ".userKey: required, at most " + MAX_USER_KEY_LENGTH + " storable characters");
 			} else if (rowByUserKey.putIfAbsent(userKey, i) != null) {
 				violations.add(path + ".userKey: same customer as rows[" + rowByUserKey.get(userKey) + "]");
 			}
@@ -85,11 +90,15 @@ public class AttributeSnapshotService {
 			row.values().forEach((name, value) -> {
 				AttributeDef def = snapshotDefs.get(name);
 				if (def == null) {
-					violations.add(path + "." + name + ": not a SNAPSHOT attribute in the catalog");
+					// echo the key only if it is a well-formed name: it comes from the loader's input
+					violations.add(AttributeName.isValid(name)
+							? path + "." + name + ": not a SNAPSHOT attribute in the catalog"
+							: path + ": an attribute key that is not a valid attribute name");
 				} else if (!SnapshotValues.isAbsent(value)) {
-					Object stored = SnapshotValues.normalize(value, def.getDataType());
+					Object stored = SnapshotValues.normalize(value, def.getDataType(), maxStringLength);
 					if (stored == null) {
-						violations.add(path + "." + name + ": expected a " + def.getDataType() + " value");
+						violations.add(path + "." + name + ": expected "
+								+ SnapshotValues.expectation(def.getDataType(), maxStringLength));
 					} else {
 						normalized.put(name, stored);
 					}
@@ -106,21 +115,34 @@ public class AttributeSnapshotService {
 			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID",
 					violations.size() + " problem(s) in snapshot batch: " + String.join("; ", violations), violations);
 		}
-		load.appended(valid.size());
+		// inserted in key order: two batches sharing customers then wait on each other
+		// instead of deadlocking on the unique (load_id, user_key) index
+		valid.sort(Comparator.comparing(AttributeSnapshot::getUserKey));
 		try {
-			snapshots.saveAll(valid);
-			return loads.saveAndFlush(load);
+			snapshots.saveAllAndFlush(valid);
+			return load;
 		} catch (DataIntegrityViolationException e) {
-			// The database's message can quote the row's JSON, sensitive values included:
-			// report without it. Reached by a concurrent append of the same customer.
+			if (!Constraints.violated(e, Constraints.SNAPSHOT_USER)) {
+				throw e;
+			}
 			String problem = "batch: rejected by the database; a customer in it was appended concurrently";
 			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID", problem, List.of(problem));
 		}
 	}
 
+	/** Rows appended so far, for a loader to track progress and compare before activating. */
+	public long rowCount(UUID loadId) {
+		getLoad(loadId);
+		return snapshots.countByLoadId(loadId);
+	}
+
 	/**
 	 * Starts serving this load and supersedes the one serving until now, in one
-	 * transaction. The old ACTIVE row is flushed before this one changes at all:
+	 * transaction — only if it holds exactly {@code expectedRows} rows (the count
+	 * the loader read from its source), so a truncated load never replaces a
+	 * complete one. The count is taken under the activation lock, after every
+	 * in-flight append has committed.
+	 * The old ACTIVE row is flushed before this one changes at all:
 	 * the one-ACTIVE index is checked per statement, and a single flush would
 	 * order the two updates as it pleases.
 	 *
@@ -130,15 +152,27 @@ public class AttributeSnapshotService {
 	 * LOADING. Activations that don't overlap each supersede the previous one.
 	 */
 	@Transactional
-	public SnapshotLoad activate(UUID loadId) {
-		SnapshotLoad load = getLoad(loadId);
+	public SnapshotLoad activate(UUID loadId, long expectedRows) {
+		SnapshotLoad load = loads.lockForActivation(loadId).orElseThrow(() -> loadNotFound(loadId));
 		load.requireLoading();
+		long rows = snapshots.countByLoadId(loadId);
+		load.requireRows(rows, expectedRows);
 		loads.findByStatus(SnapshotLoadStatus.ACTIVE).ifPresent(current -> {
 			current.supersede();
 			loads.saveAndFlush(current);
 		});
-		load.activate(Instant.now());
-		return loads.saveAndFlush(load);
+		load.activate(Instant.now(), rows);
+		try {
+			return loads.saveAndFlush(load);
+		} catch (DataIntegrityViolationException e) {
+			if (!Constraints.violated(e, Constraints.ACTIVE_LOAD)) {
+				throw e;
+			}
+			// an overlapping activation turned its load ACTIVE first: the same conflict the
+			// @Version check reports when a load was already serving
+			throw new ObjectOptimisticLockingFailureException(SnapshotLoad.class, loadId,
+					"another snapshot load was activated concurrently", e);
+		}
 	}
 
 	@Transactional
@@ -156,6 +190,10 @@ public class AttributeSnapshotService {
 	/** Empty when nothing is loaded for this customer: conditions on snapshot attributes are then false. */
 	public Optional<CustomerSnapshot> find(String userKey) {
 		String key = userKey(userKey);
+		if (!StorableText.isStorable(key)) {
+			// no such key can have been stored, and the lookup itself would raise a database error
+			return Optional.empty();
+		}
 		return snapshots.findActive(key).map(active -> {
 			Map<String, AttributeDef> snapshotDefs = snapshotDefs();
 			Set<String> sensitive = snapshotDefs.values().stream()
@@ -173,8 +211,11 @@ public class AttributeSnapshotService {
 	}
 
 	private SnapshotLoad getLoad(UUID loadId) {
-		return loads.findById(loadId).orElseThrow(
-				() -> new BusinessRuleException("SNAPSHOT_LOAD_NOT_FOUND", "Snapshot load " + loadId + " not found"));
+		return loads.findById(loadId).orElseThrow(() -> loadNotFound(loadId));
+	}
+
+	private static BusinessRuleException loadNotFound(UUID loadId) {
+		return new BusinessRuleException("SNAPSHOT_LOAD_NOT_FOUND", "Snapshot load " + loadId + " not found");
 	}
 
 	private Map<String, AttributeDef> snapshotDefs() {

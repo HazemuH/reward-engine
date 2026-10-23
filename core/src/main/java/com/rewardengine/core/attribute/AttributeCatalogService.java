@@ -36,7 +36,7 @@ public class AttributeCatalogService {
 		List<String> violations = new ArrayList<>();
 		if (!AttributeName.isValid(name)) {
 			violations.add("name: " + AttributeName.RULE);
-		} else if (BuiltInAttribute.named(name).isPresent()) {
+		} else if (BuiltInAttribute.reserves(name)) {
 			violations.add("name: \"" + name + "\" is supplied by the engine and can't be redefined");
 		}
 		if (source == null) {
@@ -50,13 +50,16 @@ public class AttributeCatalogService {
 			throw new BusinessRuleException("ATTRIBUTE_INVALID",
 					"Attribute is invalid: " + String.join("; ", violations), violations);
 		}
-		if (defs.findByName(name).isPresent()) {
+		if (defs.existsByNameIgnoreCase(name)) {
 			throw new BusinessRuleException("ATTRIBUTE_ALREADY_DEFINED", "Attribute " + name + " is already defined");
 		}
 		try {
 			return defs.saveAndFlush(AttributeDef.define(name, source, dataType, sensitive, validDescription));
 		} catch (DataIntegrityViolationException e) {
-			// a concurrent define of the same name won the unique (tenant_id, name)
+			if (!Constraints.violated(e, Constraints.ATTRIBUTE_NAME)) {
+				throw e;
+			}
+			// a concurrent define of the same name won the unique (tenant_id, lower(name))
 			throw new BusinessRuleException("ATTRIBUTE_ALREADY_DEFINED", "Attribute " + name + " is already defined");
 		}
 	}
@@ -112,6 +115,8 @@ public class AttributeCatalogService {
 		// code points, not UTF-16 units: varchar(500) counts characters
 		if (stripped.codePointCount(0, stripped.length()) > MAX_DESCRIPTION_LENGTH) {
 			violations.add("description: at most " + MAX_DESCRIPTION_LENGTH + " characters");
+		} else if (!StorableText.isStorable(stripped)) {
+			violations.add("description: contains characters that can't be stored");
 		}
 		return stripped.isEmpty() ? null : stripped;
 	}

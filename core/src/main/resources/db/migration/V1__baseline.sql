@@ -214,9 +214,12 @@ create table attribute_def (
     created_at timestamptz not null,
     created_by varchar(100),
     updated_at timestamptz,
-    updated_by varchar(100),
-    unique (tenant_id, name)
+    updated_by varchar(100)
 );
+
+-- Unique regardless of case: two names differing only in case invite a
+-- condition on the wrong one (one loaded, the other caller-sent).
+create unique index uq_attribute_def_name on attribute_def (tenant_id, lower(name));
 
 -- One generation of the customer attribute snapshot. Activating a load
 -- supersedes the previous one in the same transaction (the atomic swap); at
@@ -252,7 +255,7 @@ create table attribute_snapshot (
     created_by varchar(100),
     updated_at timestamptz,
     updated_by varchar(100),
-    unique (load_id, user_key)
+    constraint uq_attribute_snapshot_user unique (load_id, user_key)
 );
 
 create table redemption (

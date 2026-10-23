@@ -11,12 +11,15 @@ import com.rewardengine.common.tenant.TenantContext;
 import com.rewardengine.core.TestcontainersConfiguration;
 import com.rewardengine.core.tenant.TenantRepository;
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.stream.IntStream;
@@ -24,7 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 @SpringBootTest
@@ -43,6 +46,9 @@ class AttributeSnapshotServiceTest {
 	@Autowired
 	SnapshotLoadRepository loads;
 
+	@Autowired
+	JdbcTemplate jdbc;
+
 	@Test
 	void loadIsNotServedUntilActivatedThenValuesComeBackTyped() {
 		UUID tenant = tenantWithCatalog();
@@ -56,7 +62,7 @@ class AttributeSnapshotServiceTest {
 
 		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1"))).isEmpty();
 
-		SnapshotLoad active = TenantContext.callAs(tenant, () -> service.activate(load.getId()));
+		SnapshotLoad active = TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
 		CustomerSnapshot snapshot = TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow();
 
 		assertThat(active.getRowCount()).isOne();
@@ -74,10 +80,10 @@ class AttributeSnapshotServiceTest {
 	void activatingANewLoadSwapsTheWholeGeneration() {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad first = load(tenant, row("u-1", "GOLD"), row("u-2", "SILVER"));
-		TenantContext.callAs(tenant, () -> service.activate(first.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(first.getId(), service.rowCount(first.getId())));
 		SnapshotLoad second = load(tenant, row("u-1", "PLATINUM"));
 
-		TenantContext.callAs(tenant, () -> service.activate(second.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(second.getId(), service.rowCount(second.getId())));
 
 		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow().value("customer.segment"))
 				.contains("PLATINUM");
@@ -96,7 +102,7 @@ class AttributeSnapshotServiceTest {
 		values.put("customer.tenureMonths", null);
 		values.put("customer.employee", false);
 		SnapshotLoad load = load(tenant, new SnapshotRow("u-1", values));
-		TenantContext.callAs(tenant, () -> service.activate(load.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
 
 		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow().values())
 				.containsOnly(Map.entry("customer.employee", false));
@@ -118,17 +124,16 @@ class AttributeSnapshotServiceTest {
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
 					assertThat(e.getCode()).isEqualTo("SNAPSHOT_ROWS_INVALID");
 					assertThat(e.getDetails()).containsExactlyInAnyOrder(
-							"rows[0].customer.gender: expected a STRING value",
+							"rows[0].customer.gender: expected a STRING of at most 1000 characters",
 							"rows[0].amount: not a SNAPSHOT attribute in the catalog",
 							"rows[0].customer.unknown: not a SNAPSHOT attribute in the catalog",
-							"rows[1].userKey: required, at most 200 characters",
+							"rows[1].userKey: required, at most 200 storable characters",
 							"rows[3].userKey: same customer as rows[2]",
 							"rows[4].userKey: customer already in this load",
 							"rows[5]: must not be null");
 					assertThat(e.getMessage()).doesNotContain("42").doesNotContain("u-2");
 				});
-		assertThat(TenantContext.callAs(tenant, () -> loads.findById(load.getId())).orElseThrow().getRowCount())
-				.isOne();
+		assertThat(TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId()))).getRowCount()).isOne();
 	}
 
 	@Test
@@ -139,24 +144,130 @@ class AttributeSnapshotServiceTest {
 				new SnapshotRow("u-1", Map.of("customer.gender", "F\u0000secret")),
 				new SnapshotRow("u-2", Map.of("customer.gender", "\uD83D")),
 				new SnapshotRow("u-3", Map.of("customer.tenureMonths", new BigDecimal("1E+1500"))),
-				new SnapshotRow("u-4", Map.of("customer.tenureMonths", new BigDecimal("0.000000000000000000001"))));
+				new SnapshotRow("u-4", Map.of("customer.tenureMonths", new BigDecimal("0.000000000000000000001"))),
+				new SnapshotRow("u-5", Map.of("customer.segment", "x".repeat(1_001))),
+				new SnapshotRow("u-6", Map.of("bad key\nINFO forged log line", "x")));
 
 		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), batch)))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
 					assertThat(e.getDetails()).containsExactly(
-							"rows[0].customer.gender: expected a STRING value",
-							"rows[1].customer.gender: expected a STRING value",
-							"rows[2].customer.tenureMonths: expected a NUMBER value",
-							"rows[3].customer.tenureMonths: expected a NUMBER value");
-					assertThat(e.getMessage()).doesNotContain("secret");
+							"rows[0].customer.gender: expected a STRING of at most 1000 characters",
+							"rows[1].customer.gender: expected a STRING of at most 1000 characters",
+							"rows[2].customer.tenureMonths: expected a NUMBER with at most 30 integer and 20 fraction digits",
+							"rows[3].customer.tenureMonths: expected a NUMBER with at most 30 integer and 20 fraction digits",
+							"rows[4].customer.segment: expected a STRING of at most 1000 characters",
+							"rows[5]: an attribute key that is not a valid attribute name");
+					assertThat(e.getMessage()).doesNotContain("secret").doesNotContain("forged");
 				});
+	}
+
+	@Test
+	void unstorableUserKeyIsAValidationErrorAndNeverFound() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = load(tenant, row("u-1", "GOLD"));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
+		SnapshotLoad next = TenantContext.callAs(tenant, () -> service.beginLoad());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant,
+				() -> service.append(next.getId(), List.of(row("u-1\u0000", "GOLD")))))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails())
+						.containsExactly("rows[0].userKey: required, at most 200 storable characters"));
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1\u0000"))).isEmpty();
+	}
+
+	@Test
+	void emptyLoadCannotReplaceTheServingOne() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad serving = load(tenant, row("u-1", "GOLD"));
+		TenantContext.callAs(tenant, () -> service.activate(serving.getId(), service.rowCount(serving.getId())));
+		SnapshotLoad empty = TenantContext.callAs(tenant, () -> service.beginLoad());
+
+		assertRejected(tenant, () -> service.activate(empty.getId(), service.rowCount(empty.getId())), "SNAPSHOT_LOAD_EMPTY");
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1"))).isPresent();
+	}
+
+	@Test
+	void parallelAppendsOfDifferentCustomersToOneLoadAllLand() throws Exception {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		List<Callable<SnapshotLoad>> appenders = IntStream.range(0, 8)
+				.<Callable<SnapshotLoad>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> service.append(
+						load.getId(), List.of(row("a-" + i, "GOLD"), row("b-" + i, "SILVER")))))
+				.toList();
+
+		assertThat(race(appenders)).isEmpty();
+		assertThat(TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId()))).getRowCount()).isEqualTo(16);
+	}
+
+	@Test
+	void appendRacingActivationNeverLeavesAnUncountedRowInAServingLoad() throws Exception {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = load(tenant, row("u-0", "GOLD"));
+		List<Callable<Object>> callers = new ArrayList<>();
+		callers.add(() -> TenantContext.callAs(tenant, () -> service.activate(load.getId(), 1)));
+		IntStream.rangeClosed(1, 8).forEach(i -> callers.add(() -> TenantContext.callAs(tenant,
+				() -> service.append(load.getId(), List.of(row("u-" + i, "GOLD"))))));
+
+		List<Throwable> failures = race(callers);
+
+		// appends that beat the activation make it INCOMPLETE; appends after it are NOT_OPEN
+		assertThat(failures).allSatisfy(e -> assertThat(e).isInstanceOfSatisfying(BusinessRuleException.class,
+				b -> assertThat(b.getCode()).isIn("SNAPSHOT_LOAD_NOT_OPEN", "SNAPSHOT_LOAD_INCOMPLETE")));
+		long stored = TenantContext.callAs(tenant, () -> service.rowCount(load.getId()));
+		Optional<SnapshotLoad> active = TenantContext.callAs(tenant, () -> service.activeLoad());
+		if (active.isPresent()) {
+			assertThat(active.get().getRowCount()).isEqualTo(stored).isOne();
+		} else {
+			assertThat(TenantContext.callAs(tenant, () -> loads.findById(load.getId())).orElseThrow().getStatus())
+					.isEqualTo(SnapshotLoadStatus.LOADING);
+		}
+	}
+
+	@Test
+	void truncatedLoadCannotReplaceTheServingOne() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad serving = load(tenant, row("u-1", "GOLD"), row("u-2", "GOLD"));
+		TenantContext.callAs(tenant, () -> service.activate(serving.getId(), 2));
+		SnapshotLoad partial = load(tenant, row("u-1", "SILVER"));
+
+		assertRejected(tenant, () -> service.activate(partial.getId(), 2), "SNAPSHOT_LOAD_INCOMPLETE");
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-2"))).isPresent();
+		assertThat(TenantContext.callAs(tenant, () -> service.rowCount(partial.getId()))).isOne();
+	}
+
+	@Test
+	void stringLimitCountsCharactersAfterStripping() {
+		UUID tenant = tenantWithCatalog();
+		String padded = "     " + "x".repeat(995) + "     ";
+		String emoji = "\uD83D\uDE00".repeat(600);
+		SnapshotLoad load = load(tenant, row("u-1", padded), row("u-2", emoji));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow().value("customer.segment"))
+				.contains("x".repeat(995));
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-2")).orElseThrow().value("customer.segment"))
+				.contains(emoji);
+	}
+
+	@Test
+	void databaseErrorsCarryNoRowValues() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = load(tenant, row("secret-key", "GOLD"));
+		String insert = "insert into attribute_snapshot (id, tenant_id, load_id, user_key, attributes, created_at) "
+				+ "values (?, ?, ?, ?, cast(? as jsonb), now())";
+		List<Object[]> duplicate = List.<Object[]>of(new Object[] {UUID.randomUUID(), tenant, load.getId(),
+				"secret-key", "{\"customer.gender\": \"secret-value\"}"});
+
+		// a failed batch is what Hibernate logs at ERROR; neither its message nor any cause may quote the row
+		assertThatThrownBy(() -> jdbc.batchUpdate(insert, duplicate))
+				.satisfies(e -> assertNoSecret(e));
 	}
 
 	@Test
 	void userKeysAndStringValuesAreStrippedOnTheWayInAndKeysOnTheWayOut() {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad load = load(tenant, row(" u-1 ", " GOLD "));
-		TenantContext.callAs(tenant, () -> service.activate(load.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
 
 		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow().value("customer.segment"))
 				.contains("GOLD");
@@ -177,13 +288,13 @@ class AttributeSnapshotServiceTest {
 	void onlyALoadingLoadTakesRowsOrChangesState() {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad active = load(tenant, row("u-1", "GOLD"));
-		TenantContext.callAs(tenant, () -> service.activate(active.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(active.getId(), service.rowCount(active.getId())));
 		SnapshotLoad failed = TenantContext.callAs(tenant, () -> service.beginLoad());
 		TenantContext.callAs(tenant, () -> service.fail(failed.getId()));
 
 		assertRejected(tenant, () -> service.append(active.getId(), List.of(row("u-2", "GOLD"))), "SNAPSHOT_LOAD_NOT_OPEN");
-		assertRejected(tenant, () -> service.activate(active.getId()), "SNAPSHOT_LOAD_NOT_OPEN");
-		assertRejected(tenant, () -> service.activate(failed.getId()), "SNAPSHOT_LOAD_NOT_OPEN");
+		assertRejected(tenant, () -> service.activate(active.getId(), service.rowCount(active.getId())), "SNAPSHOT_LOAD_NOT_OPEN");
+		assertRejected(tenant, () -> service.activate(failed.getId(), service.rowCount(failed.getId())), "SNAPSHOT_LOAD_NOT_OPEN");
 		assertRejected(tenant, () -> service.fail(failed.getId()), "SNAPSHOT_LOAD_NOT_OPEN");
 		assertThat(TenantContext.callAs(tenant, () -> service.activeLoad()).orElseThrow().getId())
 				.isEqualTo(active.getId());
@@ -194,7 +305,7 @@ class AttributeSnapshotServiceTest {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad load = load(tenant,
 				new SnapshotRow("u-1", Map.of("customer.gender", "F", "customer.segment", "GOLD")));
-		TenantContext.callAs(tenant, () -> service.activate(load.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
 
 		CustomerSnapshot snapshot = TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow();
 
@@ -210,7 +321,7 @@ class AttributeSnapshotServiceTest {
 	void flaggingAnAttributeSensitiveProtectsValuesAlreadyLoaded() {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad load = load(tenant, row("u-1", "GOLD"));
-		TenantContext.callAs(tenant, () -> service.activate(load.getId()));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), service.rowCount(load.getId())));
 		AttributeDef segment = TenantContext.callAs(tenant, () -> catalog.list()).stream()
 				.filter(def -> def.getName().equals("customer.segment")).findFirst().orElseThrow();
 
@@ -227,13 +338,13 @@ class AttributeSnapshotServiceTest {
 			UUID tenant = tenantWithCatalog();
 			if (withServingLoad) {
 				SnapshotLoad serving = load(tenant, row("u-0", "GOLD"));
-				TenantContext.callAs(tenant, () -> service.activate(serving.getId()));
+				TenantContext.callAs(tenant, () -> service.activate(serving.getId(), service.rowCount(serving.getId())));
 			}
 			List<UUID> candidates = IntStream.range(0, 5)
 					.mapToObj(i -> load(tenant, row("u-" + i, "GOLD")).getId())
 					.toList();
 			List<Callable<SnapshotLoad>> activators = candidates.stream()
-					.<Callable<SnapshotLoad>>map(id -> () -> TenantContext.callAs(tenant, () -> service.activate(id)))
+					.<Callable<SnapshotLoad>>map(id -> () -> TenantContext.callAs(tenant, () -> service.activate(id, 1)))
 					.toList();
 
 			List<Throwable> failures = race(activators);
@@ -246,8 +357,7 @@ class AttributeSnapshotServiceTest {
 			assertThat(statuses).filteredOn(SnapshotLoadStatus.ACTIVE::equals).hasSize(1);
 			assertThat(statuses).filteredOn(SnapshotLoadStatus.SUPERSEDED::equals).hasSize(winners - 1);
 			assertThat(statuses).filteredOn(SnapshotLoadStatus.LOADING::equals).hasSize(failures.size());
-			assertThat(failures).allSatisfy(e -> assertThat(e).isInstanceOfAny(
-					ObjectOptimisticLockingFailureException.class, DataIntegrityViolationException.class));
+			assertThat(failures).allMatch(ObjectOptimisticLockingFailureException.class::isInstance);
 			assertThat(TenantContext.callAs(tenant, () -> loads.findAll()))
 					.filteredOn(l -> l.getStatus() == SnapshotLoadStatus.ACTIVE).hasSize(1);
 		}
@@ -258,17 +368,17 @@ class AttributeSnapshotServiceTest {
 		UUID owner = tenantWithCatalog();
 		UUID other = tenantWithCatalog();
 		SnapshotLoad ownerLoad = load(owner, row("u-1", "GOLD"));
-		TenantContext.callAs(owner, () -> service.activate(ownerLoad.getId()));
+		TenantContext.callAs(owner, () -> service.activate(ownerLoad.getId(), service.rowCount(ownerLoad.getId())));
 		SnapshotLoad pending = TenantContext.callAs(owner, () -> service.beginLoad());
 
 		assertThat(TenantContext.callAs(other, () -> service.find("u-1"))).isEmpty();
 		assertThat(TenantContext.callAs(other, () -> service.activeLoad())).isEmpty();
 		assertRejected(other, () -> service.append(pending.getId(), List.of(row("u-2", "GOLD"))),
 				"SNAPSHOT_LOAD_NOT_FOUND");
-		assertRejected(other, () -> service.activate(pending.getId()), "SNAPSHOT_LOAD_NOT_FOUND");
+		assertRejected(other, () -> service.activate(pending.getId(), service.rowCount(pending.getId())), "SNAPSHOT_LOAD_NOT_FOUND");
 		// one ACTIVE load per tenant, not per table
 		SnapshotLoad otherLoad = load(other, row("u-1", "SILVER"));
-		TenantContext.callAs(other, () -> service.activate(otherLoad.getId()));
+		TenantContext.callAs(other, () -> service.activate(otherLoad.getId(), service.rowCount(otherLoad.getId())));
 
 		assertThat(TenantContext.callAs(owner, () -> service.find("u-1")).orElseThrow().value("customer.segment"))
 				.contains("GOLD");
@@ -297,5 +407,17 @@ class AttributeSnapshotServiceTest {
 
 	private static SnapshotRow row(String userKey, String segment) {
 		return new SnapshotRow(userKey, Map.of("customer.segment", segment));
+	}
+
+	/** Every message Hibernate's SqlExceptionHelper could log: the cause chain and each SQLException's next chain. */
+	private static void assertNoSecret(Throwable e) {
+		for (Throwable t = e; t != null; t = t.getCause()) {
+			assertThat(String.valueOf(t.getMessage())).doesNotContain("secret");
+			if (t instanceof SQLException sql) {
+				for (SQLException next = sql.getNextException(); next != null; next = next.getNextException()) {
+					assertNoSecret(next);
+				}
+			}
+		}
 	}
 }

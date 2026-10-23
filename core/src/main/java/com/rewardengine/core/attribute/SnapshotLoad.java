@@ -13,7 +13,8 @@ import lombok.Getter;
 /**
  * One generation of the customer attribute snapshot. Rows are appended while
  * LOADING and invisible to reads until the load is activated; createdAt is when
- * loading started, activatedAt when it began serving.
+ * loading started, activatedAt when it began serving, rowCount the rows it
+ * serves (counted at activation, so parallel appends never contend on this row).
  */
 @Getter
 @Entity
@@ -29,15 +30,27 @@ public class SnapshotLoad extends TenantScopedEntity {
 
 	private Instant activatedAt;
 
-	void appended(int rows) {
-		requireLoading();
-		rowCount += rows;
+	/**
+	 * An empty or truncated load would supersede the serving one and leave
+	 * customers without a snapshot.
+	 */
+	void requireRows(long rows, long expectedRows) {
+		if (rows == 0) {
+			throw new BusinessRuleException("SNAPSHOT_LOAD_EMPTY",
+					"Snapshot load " + getId() + " has no rows; activating it would leave every customer without one");
+		}
+		if (rows != expectedRows) {
+			throw new BusinessRuleException("SNAPSHOT_LOAD_INCOMPLETE",
+					"Snapshot load " + getId() + " holds " + rows + " rows, the source had " + expectedRows);
+		}
 	}
 
-	void activate(Instant now) {
+	// requireLoading again although the service checked: this entity keeps its own transitions valid
+	void activate(Instant now, long rows) {
 		requireLoading();
 		status = SnapshotLoadStatus.ACTIVE;
 		activatedAt = now;
+		rowCount = rows;
 	}
 
 	void supersede() {

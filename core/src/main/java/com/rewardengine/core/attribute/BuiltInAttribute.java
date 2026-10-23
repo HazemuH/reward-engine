@@ -30,4 +30,13 @@ public enum BuiltInAttribute {
 	public static Optional<BuiltInAttribute> named(String name) {
 		return Arrays.stream(values()).filter(b -> b.attributeName.equals(name)).findFirst();
 	}
+
+	/**
+	 * Case-insensitive, unlike {@link #named}: a catalog attribute "Now" next to
+	 * the built-in "now" would let an author condition on a caller-sent time
+	 * believing it is server time.
+	 */
+	public static boolean reserves(String name) {
+		return Arrays.stream(values()).anyMatch(b -> b.attributeName.equalsIgnoreCase(name));
+	}
 }
