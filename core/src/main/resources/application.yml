@@ -22,10 +22,11 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
-          # multi-row writes (snapshot loads) go out in batches, not one round trip per row
+          # multi-row writes (snapshot loads) go out in batches, not one round trip per row.
+          # Deliberately without order_inserts/order_updates: entities reference each other
+          # by plain UUID columns Hibernate can't see, and the campaign/counter flows rely
+          # on statements running in the order they were issued (FKs, freeze triggers).
           batch_size: 100
-        order_inserts: true
-        order_updates: true
         # IN lists padded to powers of two: a batch's duplicate-key lookup reuses a
         # handful of statements instead of one per batch size
         query:
