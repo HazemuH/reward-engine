@@ -6,9 +6,14 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 /**
  * A JPQL bulk UPDATE rather than a dirty entity: nothing on the version row
- * itself changes. It holds the row lock the child-table triggers take anyway,
- * so the child writes that follow wait for nothing. JPQL, so @TenantId filters
- * it.
+ * itself changes. The UPDATE holds the row lock the child-table triggers take
+ * anyway, so the child writes that follow wait for nothing. JPQL, so @TenantId
+ * filters it.
+ *
+ * Not a @Lock(PESSIMISTIC_FORCE_INCREMENT) finder: on a version already loaded
+ * in the persistence context (as editableDraft leaves it) Hibernate takes the
+ * row lock but doesn't bump @Version — tried, and the limits-vs-content race
+ * tests caught it.
  *
  * It skips the auditing listener: updatedAt is set here, updatedBy must be too
  * once an auditor exists (gateway, M9).

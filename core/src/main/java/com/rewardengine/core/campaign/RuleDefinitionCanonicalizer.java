@@ -2,7 +2,8 @@ package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
 import java.util.List;
-import org.springframework.dao.DataIntegrityViolationException;
+import java.sql.SQLException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -26,18 +27,22 @@ class RuleDefinitionCanonicalizer {
 	}
 
 	/**
-	 * jsonb is stricter than JSON: it refuses the NUL escape, unpaired surrogates
-	 * and numbers past its numeric range, all of which the validator's parser
-	 * accepts. Those come back as SQL data exceptions (class 22), which are the
-	 * input's fault — unlike a lost connection, which still propagates as itself.
+	 * The validator already refuses text jsonb can't hold; this is the backstop
+	 * for anything it misses. Only an SQL data exception (state class 22) is the
+	 * input's fault — any other failure propagates as itself — and the database's
+	 * message, which quotes the input, is not passed on.
 	 *
 	 * Reads no table, so there is no tenant_id to filter on.
 	 */
 	String canonicalize(String rawDefinition) {
 		try {
 			return jdbc.queryForObject("select cast(? as jsonb)::text", String.class, rawDefinition);
-		} catch (DataIntegrityViolationException e) {
-			String problem = "not storable as jsonb: " + e.getMostSpecificCause().getMessage();
+		} catch (DataAccessException e) {
+			if (!(e.getMostSpecificCause() instanceof SQLException sql)
+					|| sql.getSQLState() == null || !sql.getSQLState().startsWith("22")) {
+				throw e;
+			}
+			String problem = "not storable as jsonb";
 			throw new BusinessRuleException("RULE_DEFINITION_INVALID", "Rule definition is invalid: " + problem,
 					List.of(problem));
 		}

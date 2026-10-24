@@ -4,7 +4,7 @@ What a campaign version's `raw_definition` may contain, and what `counter_def` h
 
 ## Save vs. submit
 
-A draft is a work in progress, so **save checks shape only**: every section is optional and may be empty, but whatever is present must be well-formed. All violations come back at once — `RULE_DEFINITION_INVALID` / `COUNTER_LIMITS_INVALID`, each with a `details` list of `path: problem` entries.
+A draft is a work in progress, so **save checks shape only**: every section is optional and may be empty, but whatever is present must be well-formed. All violations come back at once — `RULE_DEFINITION_INVALID` / `COUNTER_LIMITS_INVALID`, each with a `details` list of `path: problem` entries (`ApiResponse.error.details` has the field; the admin web layer, RE-060, fills it).
 
 Whether a version is **complete enough to approve** is checked at submit (RE-060), when the definition and its limits are final together:
 
@@ -18,7 +18,7 @@ Whether a version is **complete enough to approve** is checked at submit (RE-060
 
 Top-level sections: `conditions`, `benefits`, `vars`, `content`. Anything else is rejected — `counters` included, because limits live in `counter_def` (one source of truth for caps).
 
-Stored in jsonb's own canonical text (Postgres is asked to produce it), so resending an unchanged definition with different spacing or key order doesn't bump `@Version`. Duplicate keys are rejected rather than silently collapsed, and so is anything jsonb can't store (a NUL escape, an unpaired surrogate, a number past its range).
+Stored in jsonb's own canonical text (Postgres is asked to produce it), so resending an unchanged definition with different spacing or key order doesn't bump `@Version`. Duplicate keys are rejected rather than silently collapsed. So is any key or string jsonb would refuse or the driver would alter — a NUL, or an unpaired surrogate (which the driver would store as `?`) — and any number past jsonb's numeric range, each reported at its path. The script and channels get the same character check (`DRAFT_CONTENT_INVALID`; channels 1–50 characters).
 
 ```json
 {
@@ -59,7 +59,7 @@ An operand is a literal or `{"var": "<name>"}` naming a declared var; the var's 
 
 ### `benefits`
 
-Each type at most once, and at most one discount per version. Amounts are whole numbers greater than 0, in the same unit as the matching counters (`MONEY` amounts in the tenant's currency).
+Each type at most once, and at most one discount per version. Amounts are whole numbers from 1 to 10^15, in the same unit as the matching counters (`MONEY` amounts in the tenant's currency); the bound keeps a counter's `used + amount` inside bigint.
 
 | `type` | Fields | Granted |
 |---|---|---|
@@ -70,7 +70,7 @@ Each type at most once, and at most one discount per version. Amounts are whole 
 
 ### `content`
 
-Object keyed by language tag (`en`, `id`, `pt-BR`), each holding any of `title`, `description`, `terms`, `message` as non-blank text. Every language must carry the same fields, so no outcome is shown untranslated.
+Object keyed by BCP 47 language tag (`en`, `id`, `pt-BR`, `zh-Hant`, `es-419`), each holding any of `title`, `description`, `terms`, `message` as non-blank text. Every language must carry the same fields, so no outcome is shown untranslated.
 
 ## Counter limits (`counter_def`)
 
@@ -83,4 +83,4 @@ Authored as an ordered list through `CounterDefService.replaceDraftLimits(versio
 | `unit` | `COUNT`, `MONEY`, `POINT` |
 | `period` | `CAMPAIGN`, `DAY`, `WEEK`, `MONTH` |
 | `mode` | `ALL_OR_NOTHING`, or `PARTIAL` (only with `MONEY`/`POINT`) |
-| `cap` | Greater than 0 |
+| `cap` | Whole number from 1 to 10^15 (same bound as amounts; the database checks it too) |
