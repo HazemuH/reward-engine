@@ -22,12 +22,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 @SpringBootTest
@@ -49,11 +55,17 @@ class AttributeSnapshotServiceTest {
 	@Autowired
 	JdbcTemplate jdbc;
 
+	@Autowired
+	PlatformTransactionManager txManager;
+
+	@Autowired
+	SnapshotBatches batches;
+
 	@Test
 	void loadIsNotServedUntilActivatedThenValuesComeBackTyped() {
 		UUID tenant = tenantWithCatalog();
 		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
-		TenantContext.callAs(tenant, () -> service.append(load.getId(), List.of(new SnapshotRow("u-1", Map.of(
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), newBatchKey(), List.of(new SnapshotRow("u-1", Map.of(
 				"customer.segment", "GOLD",
 				"customer.tenureMonths", 18,
 				"customer.employee", true,
@@ -117,10 +129,10 @@ class AttributeSnapshotServiceTest {
 				new SnapshotRow(" ", Map.of()),
 				row("u-2", "GOLD"),
 				row("u-2", "SILVER"),
-				row("u-0", "GOLD"),
+				row("u-0", "SILVER"),
 				null);
 
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), batch)))
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), newBatchKey(), batch)))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
 					assertThat(e.getCode()).isEqualTo("SNAPSHOT_ROWS_INVALID");
 					assertThat(e.getDetails()).containsExactlyInAnyOrder(
@@ -129,7 +141,6 @@ class AttributeSnapshotServiceTest {
 							"rows[0].customer.unknown: not a SNAPSHOT attribute in the catalog",
 							"rows[1].userKey: required, at most 200 storable characters",
 							"rows[3].userKey: same customer as rows[2]",
-							"rows[4].userKey: customer already in this load",
 							"rows[5]: must not be null");
 					assertThat(e.getMessage()).doesNotContain("42").doesNotContain("u-2");
 				});
@@ -148,7 +159,7 @@ class AttributeSnapshotServiceTest {
 				new SnapshotRow("u-5", Map.of("customer.segment", "x".repeat(1_001))),
 				new SnapshotRow("u-6", Map.of("bad key\nINFO forged log line", "x")));
 
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), batch)))
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), newBatchKey(), batch)))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
 					assertThat(e.getDetails()).containsExactly(
 							"rows[0].customer.gender: expected a STRING of at most 1000 characters",
@@ -169,7 +180,7 @@ class AttributeSnapshotServiceTest {
 		SnapshotLoad next = TenantContext.callAs(tenant, () -> service.beginLoad());
 
 		assertThatThrownBy(() -> TenantContext.callAs(tenant,
-				() -> service.append(next.getId(), List.of(row("u-1\u0000", "GOLD")))))
+				() -> service.append(next.getId(), newBatchKey(), List.of(row("u-1\u0000", "GOLD")))))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails())
 						.containsExactly("rows[0].userKey: required, at most 200 storable characters"));
 		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1\u0000"))).isEmpty();
@@ -192,7 +203,7 @@ class AttributeSnapshotServiceTest {
 		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
 		List<Callable<SnapshotLoad>> appenders = IntStream.range(0, 8)
 				.<Callable<SnapshotLoad>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> service.append(
-						load.getId(), List.of(row("a-" + i, "GOLD"), row("b-" + i, "SILVER")))))
+						load.getId(), newBatchKey(), List.of(row("a-" + i, "GOLD"), row("b-" + i, "SILVER")))))
 				.toList();
 
 		assertThat(race(appenders)).isEmpty();
@@ -206,7 +217,7 @@ class AttributeSnapshotServiceTest {
 		List<Callable<Object>> callers = new ArrayList<>();
 		callers.add(() -> TenantContext.callAs(tenant, () -> service.activate(load.getId(), 1)));
 		IntStream.rangeClosed(1, 8).forEach(i -> callers.add(() -> TenantContext.callAs(tenant,
-				() -> service.append(load.getId(), List.of(row("u-" + i, "GOLD"))))));
+				() -> service.append(load.getId(), newBatchKey(), List.of(row("u-" + i, "GOLD"))))));
 
 		List<Throwable> failures = race(callers);
 
@@ -281,7 +292,178 @@ class AttributeSnapshotServiceTest {
 		List<SnapshotRow> batch = IntStream.rangeClosed(0, AttributeSnapshotService.MAX_BATCH_ROWS)
 				.mapToObj(i -> row("u-" + i, "GOLD")).toList();
 
-		assertRejected(tenant, () -> service.append(load.getId(), batch), "SNAPSHOT_ROWS_INVALID");
+		assertRejected(tenant, () -> service.append(load.getId(), newBatchKey(), batch), "SNAPSHOT_ROWS_INVALID");
+	}
+
+	@Test
+	void resendingABatchUnderItsKeyIsANoOpButADuplicateCustomerIsNot() {
+		UUID tenant = tenantWithCatalog();
+		List<SnapshotRow> rows = List.of(row("u-1", "GOLD"), row("u-2", "SILVER"));
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", rows));
+
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", rows));
+		assertThat(TenantContext.callAs(tenant, () -> service.rowCount(load.getId()))).isEqualTo(2);
+
+		// the same customer again under another batch is a duplicate in the source, reported by row
+		assertThatThrownBy(() -> TenantContext.callAs(tenant,
+				() -> service.append(load.getId(), "batch-2", List.of(row("u-3", "GOLD"), row("u-1", "GOLD")))))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails())
+						.containsExactly("rows[1].userKey: customer already in this load"));
+		assertRejected(tenant, () -> service.append(load.getId(), " ", rows), "SNAPSHOT_ROWS_INVALID");
+		// the key resent with other content — other values for the same customers, too — is a loader bug
+		for (List<SnapshotRow> other : List.of(List.of(row("u-9", "GOLD")),
+				List.of(row("u-1", "PLATINUM"), row("u-2", "SILVER")))) {
+			assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", other)))
+					.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails()).containsExactly(
+							"batchKey: batch-1 was already used for a different batch in this load"));
+		}
+		// an empty batch is recorded too: its key can't later carry rows
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-empty", List.of()));
+		assertRejected(tenant, () -> service.append(load.getId(), "batch-empty", List.of(row("u-7", "GOLD"))),
+				"SNAPSHOT_ROWS_INVALID");
+	}
+
+	@Test
+	void resendingALandedBatchAfterActivationIsStillANoOp() {
+		UUID tenant = tenantWithCatalog();
+		List<SnapshotRow> rows = List.of(row("u-1", "GOLD"));
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", rows));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), 1));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", rows)).getStatus())
+				.isEqualTo(SnapshotLoadStatus.ACTIVE);
+		assertRejected(tenant, () -> service.append(load.getId(), "batch-2", List.of(row("u-2", "GOLD"))),
+				"SNAPSHOT_LOAD_NOT_OPEN");
+	}
+
+	@Test
+	void resendingToAFailedLoadIsNotReportedAsSuccess() {
+		UUID tenant = tenantWithCatalog();
+		List<SnapshotRow> rows = List.of(row("u-1", "GOLD"));
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		TenantContext.callAs(tenant, () -> service.append(load.getId(), "batch-1", rows));
+		TenantContext.callAs(tenant, () -> service.fail(load.getId()));
+
+		assertRejected(tenant, () -> service.append(load.getId(), "batch-1", rows), "SNAPSHOT_LOAD_NOT_OPEN");
+	}
+
+	@Test
+	void overlappingFailRetriesBothReturnTheFailedLoad() throws Exception {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		List<Callable<SnapshotLoad>> failers = IntStream.range(0, 5)
+				.<Callable<SnapshotLoad>>mapToObj(i -> () -> TenantContext.callAs(tenant, () -> service.fail(load.getId())))
+				.toList();
+
+		assertThat(race(failers)).isEmpty();
+		assertThat(TenantContext.callAs(tenant, () -> loads.findById(load.getId())).orElseThrow().getStatus())
+				.isEqualTo(SnapshotLoadStatus.FAILED);
+	}
+
+	@Test
+	void retryOverlappingTheUncommittedOriginalWaitsThenIsANoOp() throws Exception {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		List<SnapshotRow> rows = List.of(row("u-1", "GOLD"), row("u-2", "SILVER"));
+		CountDownLatch appended = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		TransactionTemplate tx = new TransactionTemplate(txManager);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			Future<?> original = executor.submit(() -> TenantContext.callAs(tenant, () -> tx.execute(status -> {
+				service.append(load.getId(), "batch-1", rows);
+				appended.countDown();
+				await(release);
+				return null;
+			})));
+			await(appended);
+			Future<SnapshotLoad> retry = executor.submit(() -> TenantContext.callAs(tenant,
+					() -> service.append(load.getId(), "batch-1", rows)));
+			awaitLockWait("insert into snapshot_batch");
+			release.countDown();
+			original.get(10, TimeUnit.SECONDS);
+
+			assertThat(retry.get(10, TimeUnit.SECONDS).getId()).isEqualTo(load.getId());
+		}
+		assertThat(TenantContext.callAs(tenant, () -> service.rowCount(load.getId()))).isEqualTo(2);
+	}
+
+	@Test
+	void retriedActivationAndFailAreSafeButASupersededLoadIsNotReportedLive() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad first = load(tenant, row("u-1", "GOLD"));
+		SnapshotLoad active = TenantContext.callAs(tenant, () -> service.activate(first.getId(), 1));
+		SnapshotLoad second = load(tenant, row("u-1", "SILVER"));
+		TenantContext.callAs(tenant, () -> service.activate(second.getId(), 1));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.activate(second.getId(), 1)).getActivatedAt())
+				.isNotNull();
+		// it did activate once, but a retry must not report a replaced load as serving
+		assertRejected(tenant, () -> service.activate(first.getId(), 1), "SNAPSHOT_LOAD_SUPERSEDED");
+		assertThat(TenantContext.callAs(tenant, () -> loads.findById(first.getId())).orElseThrow().getActivatedAt())
+				.isEqualTo(active.getActivatedAt());
+		assertThat(TenantContext.callAs(tenant, () -> service.activeLoad()).orElseThrow().getId())
+				.isEqualTo(second.getId());
+		// a retry that disagrees on the count is not a retry
+		assertRejected(tenant, () -> service.activate(first.getId(), 2), "SNAPSHOT_LOAD_INCOMPLETE");
+		SnapshotLoad failed = TenantContext.callAs(tenant, () -> service.beginLoad());
+		TenantContext.callAs(tenant, () -> service.fail(failed.getId()));
+		assertThat(TenantContext.callAs(tenant, () -> service.fail(failed.getId())).getStatus())
+				.isEqualTo(SnapshotLoadStatus.FAILED);
+	}
+
+	@Test
+	void concurrentAppendOfTheSameCustomerIsReportedAsABatchProblem() throws Exception {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+		CountDownLatch appended = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		TransactionTemplate tx = new TransactionTemplate(txManager);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			// first append holds its transaction open, so the second's duplicate-key pre-check can't see it
+			Future<?> first = executor.submit(() -> TenantContext.callAs(tenant, () -> tx.execute(status -> {
+				service.append(load.getId(), newBatchKey(), List.of(row("u-1", "GOLD")));
+				appended.countDown();
+				await(release);
+				return null;
+			})));
+			await(appended);
+			Future<SnapshotLoad> second = executor.submit(() -> TenantContext.callAs(tenant,
+					() -> service.append(load.getId(), newBatchKey(), List.of(row("u-1", "SILVER"), row("u-2", "GOLD")))));
+			awaitLockWait("insert into attribute_snapshot");
+			release.countDown();
+			first.get(10, TimeUnit.SECONDS);
+
+			// through JDBC batching and logServerErrorDetail=false, the unique violation still maps
+			assertThatThrownBy(() -> second.get(10, TimeUnit.SECONDS))
+					.cause()
+					.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails())
+							.containsExactly("batch: rejected by the database; a customer in it was appended concurrently"));
+		}
+		assertThat(TenantContext.callAs(tenant, () -> service.rowCount(load.getId()))).isOne();
+	}
+
+	@Test
+	void misspelledCaseIsPointedAtTheStoredName() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.append(load.getId(),
+				newBatchKey(), List.of(new SnapshotRow("u-1", Map.of("Customer.Segment", "GOLD"))))))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> assertThat(e.getDetails()).containsExactly(
+						"rows[0].Customer.Segment: not a SNAPSHOT attribute in the catalog; it is spelled customer.segment"));
+	}
+
+	@Test
+	void trailingZerosDoNotCountAgainstTheNumberBound() {
+		UUID tenant = tenantWithCatalog();
+		SnapshotLoad load = load(tenant,
+				new SnapshotRow("u-1", Map.of("customer.tenureMonths", new BigDecimal("1.000000000000000000000"))));
+		TenantContext.callAs(tenant, () -> service.activate(load.getId(), 1));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow().value("customer.tenureMonths"))
+				.hasValueSatisfying(v -> assertThat((BigDecimal) v).isEqualByComparingTo("1"));
 	}
 
 	@Test
@@ -292,10 +474,10 @@ class AttributeSnapshotServiceTest {
 		SnapshotLoad failed = TenantContext.callAs(tenant, () -> service.beginLoad());
 		TenantContext.callAs(tenant, () -> service.fail(failed.getId()));
 
-		assertRejected(tenant, () -> service.append(active.getId(), List.of(row("u-2", "GOLD"))), "SNAPSHOT_LOAD_NOT_OPEN");
-		assertRejected(tenant, () -> service.activate(active.getId(), service.rowCount(active.getId())), "SNAPSHOT_LOAD_NOT_OPEN");
-		assertRejected(tenant, () -> service.activate(failed.getId(), service.rowCount(failed.getId())), "SNAPSHOT_LOAD_NOT_OPEN");
-		assertRejected(tenant, () -> service.fail(failed.getId()), "SNAPSHOT_LOAD_NOT_OPEN");
+		assertRejected(tenant, () -> service.append(active.getId(), newBatchKey(), List.of(row("u-2", "GOLD"))), "SNAPSHOT_LOAD_NOT_OPEN");
+		assertRejected(tenant, () -> service.activate(active.getId(), 2), "SNAPSHOT_LOAD_INCOMPLETE");
+		assertRejected(tenant, () -> service.activate(failed.getId(), 1), "SNAPSHOT_LOAD_NOT_OPEN");
+		assertRejected(tenant, () -> service.fail(active.getId()), "SNAPSHOT_LOAD_NOT_OPEN");
 		assertThat(TenantContext.callAs(tenant, () -> service.activeLoad()).orElseThrow().getId())
 				.isEqualTo(active.getId());
 	}
@@ -364,6 +546,18 @@ class AttributeSnapshotServiceTest {
 	}
 
 	@Test
+	void batchRecordsAreReadOnlyWithinTheirTenant() {
+		UUID owner = tenantWithCatalog();
+		UUID other = tenantWithCatalog();
+		SnapshotLoad load = TenantContext.callAs(owner, () -> service.beginLoad());
+		TenantContext.callAs(owner, () -> service.append(load.getId(), "batch-1", List.of(row("u-1", "GOLD"))));
+
+		// native SQL: tenant_id is bound by hand, so prove it
+		assertThat(TenantContext.callAs(owner, () -> batches.requestHash(load.getId(), "batch-1"))).isPresent();
+		assertThat(TenantContext.callAs(other, () -> batches.requestHash(load.getId(), "batch-1"))).isEmpty();
+	}
+
+	@Test
 	void anotherTenantCannotReadOrDriveTheLoads() {
 		UUID owner = tenantWithCatalog();
 		UUID other = tenantWithCatalog();
@@ -373,7 +567,7 @@ class AttributeSnapshotServiceTest {
 
 		assertThat(TenantContext.callAs(other, () -> service.find("u-1"))).isEmpty();
 		assertThat(TenantContext.callAs(other, () -> service.activeLoad())).isEmpty();
-		assertRejected(other, () -> service.append(pending.getId(), List.of(row("u-2", "GOLD"))),
+		assertRejected(other, () -> service.append(pending.getId(), newBatchKey(), List.of(row("u-2", "GOLD"))),
 				"SNAPSHOT_LOAD_NOT_FOUND");
 		assertRejected(other, () -> service.activate(pending.getId(), service.rowCount(pending.getId())), "SNAPSHOT_LOAD_NOT_FOUND");
 		// one ACTIVE load per tenant, not per table
@@ -402,7 +596,30 @@ class AttributeSnapshotServiceTest {
 
 	private SnapshotLoad load(UUID tenant, SnapshotRow... rows) {
 		SnapshotLoad load = TenantContext.callAs(tenant, () -> service.beginLoad());
-		return TenantContext.callAs(tenant, () -> service.append(load.getId(), List.of(rows)));
+		return TenantContext.callAs(tenant, () -> service.append(load.getId(), newBatchKey(), List.of(rows)));
+	}
+
+	/** Until a session running a statement starting with {@code statement} waits on a lock. */
+	private void awaitLockWait(String statement) throws InterruptedException {
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+		while (jdbc.queryForObject("select count(*) from pg_stat_activity where wait_event_type = 'Lock'"
+				+ " and query like ? || '%'", Long.class, statement) == 0) {
+			assertThat(System.nanoTime()).as("no session blocked in: " + statement).isLessThan(deadline);
+			Thread.sleep(20);
+		}
+	}
+
+	private static String newBatchKey() {
+		return "b-" + UUID.randomUUID();
+	}
+
+	private static void await(CountDownLatch latch) {
+		try {
+			assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new AssertionError(e);
+		}
 	}
 
 	private static SnapshotRow row(String userKey, String segment) {

@@ -4,7 +4,10 @@ import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.common.text.StorableText;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -26,9 +29,11 @@ public class AttributeCatalogService {
 	private static final int MAX_DESCRIPTION_LENGTH = 500;
 
 	private final AttributeDefRepository defs;
+	private final AttributeLocks locks;
 
-	public AttributeCatalogService(AttributeDefRepository defs) {
+	AttributeCatalogService(AttributeDefRepository defs, AttributeLocks locks) {
 		this.defs = defs;
+		this.locks = locks;
 	}
 
 	@Transactional
@@ -38,7 +43,7 @@ public class AttributeCatalogService {
 		if (!AttributeName.isValid(name)) {
 			violations.add("name: " + AttributeName.RULE);
 		} else if (BuiltInAttribute.reserves(name)) {
-			violations.add("name: \"" + name + "\" is supplied by the engine and can't be redefined");
+			violations.add("name: \"" + name + "\" is supplied by the engine and can't be redefined or nested under");
 		}
 		if (source == null) {
 			violations.add("source: required");
@@ -51,8 +56,16 @@ public class AttributeCatalogService {
 			throw new BusinessRuleException("ATTRIBUTE_INVALID",
 					"Attribute is invalid: " + String.join("; ", violations), violations);
 		}
+		// one define at a time per tenant: the nesting check below has no constraint behind it
+		locks.lockCatalog();
 		if (defs.existsByNameIgnoreCase(name)) {
 			throw new BusinessRuleException("ATTRIBUTE_ALREADY_DEFINED", "Attribute " + name + " is already defined");
+		}
+		List<String> nesting = defs.findNamesNestingWith(name);
+		if (!nesting.isEmpty()) {
+			String problem = "name: \"" + name + "\" nests with " + nesting.stream().sorted().toList()
+					+ "; an attribute can't be both a value and the parent of another";
+			throw new BusinessRuleException("ATTRIBUTE_INVALID", "Attribute is invalid: " + problem, List.of(problem));
 		}
 		try {
 			return defs.saveAndFlush(AttributeDef.define(name, source, dataType, sensitive, validDescription));
@@ -60,7 +73,8 @@ public class AttributeCatalogService {
 			if (!Constraints.violated(e, Constraints.ATTRIBUTE_NAME)) {
 				throw e;
 			}
-			// a concurrent define of the same name won the unique (tenant_id, lower(name))
+			// backstop: defines are serialized by the catalog lock, but the unique index on
+			// lower(name) is what holds if anything ever inserts without it
 			throw new BusinessRuleException("ATTRIBUTE_ALREADY_DEFINED", "Attribute " + name + " is already defined");
 		}
 	}
@@ -103,9 +117,17 @@ public class AttributeCatalogService {
 		if (wanted.isEmpty()) {
 			return;
 		}
-		defs.findByNameIn(wanted).forEach(def -> wanted.remove(def.getName()));
+		// the whole (small) catalog, folded in Java: matching Java-lowered names against the
+		// database's lower() would depend on its locale
+		List<String> known = new ArrayList<>(Arrays.stream(BuiltInAttribute.values())
+				.map(BuiltInAttribute::attributeName).toList());
+		defs.findAll().forEach(def -> known.add(def.getName()));
+		Map<String, String> spellingByLower = AttributeName.spellingByLower(known);
+		wanted.removeIf(name -> name.equals(spellingByLower.get(name.toLowerCase(Locale.ROOT))));
 		if (!wanted.isEmpty()) {
-			List<String> missing = wanted.stream().map(name -> name + ": not in the attribute catalog").toList();
+			List<String> missing = wanted.stream()
+					.map(name -> AttributeName.notInCatalog(name, "in the attribute catalog", spellingByLower))
+					.toList();
 			throw new BusinessRuleException("ATTRIBUTE_NOT_DEFINED",
 					"Attributes not in the catalog: " + String.join(", ", wanted), missing);
 		}
@@ -113,8 +135,7 @@ public class AttributeCatalogService {
 
 	private static String description(String description, List<String> violations) {
 		String stripped = description == null ? "" : description.strip();
-		// code points, not UTF-16 units: varchar(500) counts characters
-		if (stripped.codePointCount(0, stripped.length()) > MAX_DESCRIPTION_LENGTH) {
+		if (StorableText.length(stripped) > MAX_DESCRIPTION_LENGTH) {
 			violations.add("description: at most " + MAX_DESCRIPTION_LENGTH + " characters");
 		} else if (!StorableText.isStorable(stripped)) {
 			violations.add("description: contains characters that can't be stored");

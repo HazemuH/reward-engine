@@ -259,6 +259,19 @@ create table attribute_snapshot (
     constraint uq_attribute_snapshot_user unique (load_id, user_key)
 );
 
+-- One row per batch appended to a load: the idempotency record for append.
+-- A resent batchKey with the same request_hash is a no-op, with another hash a
+-- loader bug. Purged with its load.
+create table snapshot_batch (
+    tenant_id uuid not null references tenant(id),
+    load_id uuid not null references snapshot_load(id) on delete cascade,
+    batch_key varchar(100) not null,
+    request_hash varchar(64) not null,
+    row_count int not null check (row_count >= 0),
+    created_at timestamptz not null default now(),
+    primary key (load_id, batch_key)
+);
+
 create table redemption (
     id uuid primary key,
     tenant_id uuid not null references tenant(id),

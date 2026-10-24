@@ -1,6 +1,7 @@
 package com.rewardengine.core.attribute;
 
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -34,9 +35,12 @@ public enum BuiltInAttribute {
 	/**
 	 * Case-insensitive, unlike {@link #named}: a catalog attribute "Now" next to
 	 * the built-in "now" would let an author condition on a caller-sent time
-	 * believing it is server time.
+	 * believing it is server time. Names nested under a built-in ("now.offset")
+	 * are reserved too: a built-in is a value, not a namespace.
 	 */
 	public static boolean reserves(String name) {
-		return Arrays.stream(values()).anyMatch(b -> b.attributeName.equalsIgnoreCase(name));
+		String lower = name.toLowerCase(Locale.ROOT);
+		return Arrays.stream(values()).anyMatch(b -> lower.equals(b.attributeName.toLowerCase(Locale.ROOT))
+				|| lower.startsWith(b.attributeName.toLowerCase(Locale.ROOT) + "."));
 	}
 }

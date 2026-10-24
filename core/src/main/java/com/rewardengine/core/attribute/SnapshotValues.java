@@ -3,11 +3,18 @@ package com.rewardengine.core.attribute;
 import com.rewardengine.common.text.StorableText;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import tools.jackson.core.StreamWriteFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -21,6 +28,7 @@ final class SnapshotValues {
 
 	private static final JsonMapper MAPPER = JsonMapper.builder()
 			.enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+			.enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
 			.build();
 
 	// Far beyond any customer attribute, far inside what jsonb stores and Jackson
@@ -60,8 +68,33 @@ final class SnapshotValues {
 		return value == null || (value instanceof String s && s.isBlank());
 	}
 
+	/** Attributes in name order, so the same values always encode — and hash — the same. */
 	static String encode(Map<String, Object> normalized) {
-		return MAPPER.writeValueAsString(normalized);
+		return MAPPER.writeValueAsString(new TreeMap<>(normalized));
+	}
+
+	/**
+	 * SHA-256 over the request as sent — each row's key and its values with their
+	 * Java types, rows and attributes in a fixed order — not over the normalized
+	 * rows: a resend must match even if validation or normalization changed since
+	 * the original landed (a redeploy mid-load).
+	 */
+	static String requestHash(List<SnapshotRow> rows) {
+		MessageDigest digest;
+		try {
+			digest = MessageDigest.getInstance("SHA-256");
+		} catch (NoSuchAlgorithmException e) {
+			throw new IllegalStateException("SHA-256 is required of every JVM", e);
+		}
+		rows.stream()
+				.map(row -> row == null ? "\u0001null-row" : row.userKey() + "\u0000" + new TreeMap<>(row.values()).entrySet()
+						.stream()
+						.map(e -> e.getKey() + "=" + (e.getValue() == null ? "\u0001null"
+								: e.getValue().getClass().getName() + ":" + e.getValue()))
+						.toList())
+				.sorted()
+				.forEach(line -> digest.update((line + "\n").getBytes(StandardCharsets.UTF_8)));
+		return HexFormat.of().formatHex(digest.digest());
 	}
 
 	/**
@@ -97,14 +130,21 @@ final class SnapshotValues {
 	}
 
 	private static String string(String s, int maxLength) {
-		return s.codePointCount(0, s.length()) <= maxLength && StorableText.isStorable(s) ? s : null;
+		return StorableText.fits(s, maxLength) ? s : null;
 	}
 
+	// Measured and stored without trailing zeros: 1.000000000000000000000 is 1, whatever scale the
+	// source exported, and padding can't push a stored value past what Jackson reads back.
 	private static BigDecimal withinRange(BigDecimal d) {
-		if (d == null || d.precision() - d.scale() > MAX_INTEGER_DIGITS || d.scale() > MAX_FRACTION_DIGITS) {
+		if (d == null) {
 			return null;
 		}
-		return d;
+		BigDecimal significant = d.stripTrailingZeros();
+		if (significant.precision() - significant.scale() > MAX_INTEGER_DIGITS
+				|| significant.scale() > MAX_FRACTION_DIGITS) {
+			return null;
+		}
+		return significant;
 	}
 
 	private static BigDecimal decimal(Object value) {

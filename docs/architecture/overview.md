@@ -91,9 +91,10 @@ Admin-side codes (campaign authoring):
 | `RULE_DEFINITION_INVALID` | Rule definition breaks the schema; `details` lists every violation (`docs/architecture/rule-definition.md`) |
 | `ATTRIBUTE_INVALID` / `ATTRIBUTE_ALREADY_DEFINED` / `ATTRIBUTE_NOT_FOUND` | Catalog entry malformed, name taken in this tenant, or no such attribute |
 | `ATTRIBUTE_NOT_DEFINED` | A rule names attributes that are neither in the catalog nor built in; `details` lists them |
-| `SNAPSHOT_ROWS_INVALID` | A snapshot batch has invalid rows; `details` names each row and attribute, never the value |
+| `SNAPSHOT_ROWS_INVALID` | A snapshot batch has invalid rows, or its `batchKey` was already used for a different batch; `details` names each row and attribute, never the value |
 | `SNAPSHOT_LOAD_NOT_FOUND` / `SNAPSHOT_LOAD_NOT_OPEN` | No such load for this tenant, or the load is no longer `LOADING` |
 | `SNAPSHOT_LOAD_EMPTY` / `SNAPSHOT_LOAD_INCOMPLETE` | Activating a load with no rows, or with fewer/more rows than the source had; it would leave customers without a snapshot |
+| `SNAPSHOT_LOAD_SUPERSEDED` | Retrying the activation of a load that did activate but has since been replaced by a newer one |
 | `COUNTER_LIMITS_INVALID` | A counter limit is malformed (name, missing field, `PARTIAL` on `COUNT`, cap ≤ 0); `details` lists every violation |
 
 ## What's intentionally not built yet

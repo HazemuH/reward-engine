@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.core.attribute.AttributeName;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -78,7 +79,7 @@ class RuleDefinitionValidatorTest {
 				  { "attr": "now", "op": "<", "value": { "var": "undeclared" } },
 				  { "attr": "amount", "op": "=", "value": null, "extra": 1 }
 				] }""")).containsExactly(
-				"conditions[0].attr: required; a dotted attribute name such as \"customer.segment\" (at most 100 characters)",
+				"conditions[0].attr: required; " + AttributeName.RULE,
 				"conditions[1].op: required; one of = != > >= < <= in not_in between",
 				"conditions[2].value: must be a string or number",
 				"conditions[3].values: not used by operator \"=\"",

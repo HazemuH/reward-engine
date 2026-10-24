@@ -26,6 +26,7 @@ public final class CustomerSnapshot {
 	private final String userKey;
 	private final Instant loadedAt;
 	private final Map<String, Object> values;
+	private final Map<String, Object> scriptView;
 	private final Set<String> sensitive;
 
 	CustomerSnapshot(String userKey, Instant loadedAt, Map<String, Object> values, Set<String> sensitive) {
@@ -33,6 +34,9 @@ public final class CustomerSnapshot {
 		this.loadedAt = loadedAt;
 		this.values = Map.copyOf(values);
 		this.sensitive = Set.copyOf(sensitive);
+		this.scriptView = this.values.entrySet().stream()
+				.filter(e -> !this.sensitive.contains(e.getKey()))
+				.collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 	}
 
 	public String userKey() {
@@ -55,9 +59,7 @@ public final class CustomerSnapshot {
 
 	/** What a rule script may read: every value except sensitive ones. */
 	public Map<String, Object> scriptView() {
-		return values.entrySet().stream()
-				.filter(e -> !sensitive.contains(e.getKey()))
-				.collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
+		return scriptView;
 	}
 
 	public boolean isSensitive(String attribute) {

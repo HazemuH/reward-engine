@@ -35,19 +35,22 @@ import org.springframework.transaction.annotation.Transactional;
 public class AttributeSnapshotService {
 
 	private static final int MAX_USER_KEY_LENGTH = 200;
+	private static final int MAX_BATCH_KEY_LENGTH = 100;
 	// keeps the duplicate-key lookup's IN list well inside the driver's bind-parameter limit
 	static final int MAX_BATCH_ROWS = 10_000;
 
 	private final SnapshotLoadRepository loads;
 	private final AttributeSnapshotRepository snapshots;
 	private final AttributeDefRepository defs;
+	private final SnapshotBatches batches;
 	private final int maxStringLength;
 
-	public AttributeSnapshotService(SnapshotLoadRepository loads, AttributeSnapshotRepository snapshots,
-			AttributeDefRepository defs, SnapshotProperties properties) {
+	AttributeSnapshotService(SnapshotLoadRepository loads, AttributeSnapshotRepository snapshots,
+			AttributeDefRepository defs, SnapshotBatches batches, SnapshotProperties properties) {
 		this.loads = loads;
 		this.snapshots = snapshots;
 		this.defs = defs;
+		this.batches = batches;
 		this.maxStringLength = properties.maxStringLength();
 	}
 
@@ -60,18 +63,70 @@ public class AttributeSnapshotService {
 	 * All or nothing per batch: one invalid row rejects the batch with every
 	 * problem listed (SNAPSHOT_ROWS_INVALID), so the loader can drop or fix those
 	 * rows and resend.
+	 *
+	 * Idempotent by {@code batchKey}, the loader's id for this batch: resending
+	 * the same batch is a no-op — even while the original is still in flight, or
+	 * after the load was activated — and reusing the key for a different batch is
+	 * refused. A customer already in the load under another batch is refused, so
+	 * a duplicate in the source is reported, not silently dropped.
 	 */
 	@Transactional
-	public SnapshotLoad append(UUID loadId, List<SnapshotRow> rows) {
+	public SnapshotLoad append(UUID loadId, String batchKey, List<SnapshotRow> rows) {
 		SnapshotLoad load = loads.lockForAppend(loadId).orElseThrow(() -> loadNotFound(loadId));
-		load.requireLoading();
-		if (rows.size() > MAX_BATCH_ROWS) {
-			String problem = "rows: at most " + MAX_BATCH_ROWS + " per batch";
-			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID", problem, List.of(problem));
+		String key = batchKey == null ? "" : batchKey.strip();
+		if (key.isEmpty() || !StorableText.fits(key, MAX_BATCH_KEY_LENGTH)) {
+			throw rejected("batchKey: required, 1-" + MAX_BATCH_KEY_LENGTH + " characters that can be stored");
 		}
-		Map<String, AttributeDef> snapshotDefs = snapshotDefs();
+		if (rows.size() > MAX_BATCH_ROWS) {
+			throw rejected("rows: at most " + MAX_BATCH_ROWS + " per batch");
+		}
+		String requestHash = SnapshotValues.requestHash(rows);
+		Optional<String> recorded = batches.requestHash(loadId, key);
+		if (recorded.isPresent()) {
+			return alreadyAppended(load, key, requestHash, recorded.get());
+		}
+		load.requireLoading();
+		List<AttributeSnapshot> batch = validated(loadId, rows);
+		// waits for an in-flight original with this key, then sees its committed record
+		if (!batches.record(loadId, key, requestHash, batch.size())) {
+			return alreadyAppended(load, key, requestHash, batches.requestHash(loadId, key).orElseThrow());
+		}
 		List<String> violations = new ArrayList<>();
-		List<AttributeSnapshot> valid = new ArrayList<>();
+		Map<String, Integer> rowByUserKey = new HashMap<>();
+		for (int i = 0; i < rows.size(); i++) {
+			rowByUserKey.putIfAbsent(userKey(rows.get(i).userKey()), i);
+		}
+		if (!batch.isEmpty()) {
+			for (String loaded : snapshots.findUserKeysInLoad(loadId, rowByUserKey.keySet())) {
+				violations.add("rows[" + rowByUserKey.get(loaded) + "].userKey: customer already in this load");
+			}
+		}
+		if (!violations.isEmpty()) {
+			// rolls back the batch record too, so the corrected batch can be resent under the same key
+			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID",
+					violations.size() + " problem(s) in snapshot batch: " + String.join("; ", violations), violations);
+		}
+		try {
+			snapshots.saveAllAndFlush(batch);
+			return load;
+		} catch (DataIntegrityViolationException e) {
+			if (!Constraints.violated(e, Constraints.SNAPSHOT_USER)) {
+				throw e;
+			}
+			throw rejected("batch: rejected by the database; a customer in it was appended concurrently");
+		}
+	}
+
+	/**
+	 * The batch's rows checked against the catalog and normalized, in user-key
+	 * order — inserted in that order, two batches sharing customers wait on each
+	 * other instead of deadlocking on the unique (load_id, user_key) index.
+	 */
+	private List<AttributeSnapshot> validated(UUID loadId, List<SnapshotRow> rows) {
+		Map<String, AttributeDef> snapshotDefs = snapshotDefs();
+		Map<String, String> spellingByLower = AttributeName.spellingByLower(snapshotDefs.keySet());
+		List<String> violations = new ArrayList<>();
+		List<AttributeSnapshot> batch = new ArrayList<>();
 		Map<String, Integer> rowByUserKey = new HashMap<>();
 		for (int i = 0; i < rows.size(); i++) {
 			SnapshotRow row = rows.get(i);
@@ -81,8 +136,7 @@ public class AttributeSnapshotService {
 				continue;
 			}
 			String userKey = userKey(row.userKey());
-			if (userKey.isEmpty() || userKey.codePointCount(0, userKey.length()) > MAX_USER_KEY_LENGTH
-					|| !StorableText.isStorable(userKey)) {
+			if (userKey.isEmpty() || !StorableText.fits(userKey, MAX_USER_KEY_LENGTH)) {
 				violations.add(path + ".userKey: required, at most " + MAX_USER_KEY_LENGTH + " storable characters");
 			} else if (rowByUserKey.putIfAbsent(userKey, i) != null) {
 				violations.add(path + ".userKey: same customer as rows[" + rowByUserKey.get(userKey) + "]");
@@ -93,7 +147,8 @@ public class AttributeSnapshotService {
 				if (def == null) {
 					// echo the key only if it is a well-formed name: it comes from the loader's input
 					violations.add(AttributeName.isValid(name)
-							? path + "." + name + ": not a SNAPSHOT attribute in the catalog"
+							? path + "." + AttributeName.notInCatalog(name, "a SNAPSHOT attribute in the catalog",
+									spellingByLower)
 							: path + ": an attribute key that is not a valid attribute name");
 				} else if (!SnapshotValues.isAbsent(value)) {
 					Object stored = SnapshotValues.normalize(value, def.getDataType(), maxStringLength);
@@ -105,30 +160,33 @@ public class AttributeSnapshotService {
 					}
 				}
 			});
-			valid.add(AttributeSnapshot.of(loadId, userKey, SnapshotValues.encode(normalized)));
-		}
-		if (!rowByUserKey.isEmpty()) {
-			for (String loaded : snapshots.findUserKeysInLoad(loadId, rowByUserKey.keySet())) {
-				violations.add("rows[" + rowByUserKey.get(loaded) + "].userKey: customer already in this load");
-			}
+			batch.add(AttributeSnapshot.of(loadId, userKey, SnapshotValues.encode(normalized)));
 		}
 		if (!violations.isEmpty()) {
 			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID",
 					violations.size() + " problem(s) in snapshot batch: " + String.join("; ", violations), violations);
 		}
-		// inserted in key order: two batches sharing customers then wait on each other
-		// instead of deadlocking on the unique (load_id, user_key) index
-		valid.sort(Comparator.comparing(AttributeSnapshot::getUserKey));
-		try {
-			snapshots.saveAllAndFlush(valid);
-			return load;
-		} catch (DataIntegrityViolationException e) {
-			if (!Constraints.violated(e, Constraints.SNAPSHOT_USER)) {
-				throw e;
-			}
-			String problem = "batch: rejected by the database; a customer in it was appended concurrently";
-			throw new BusinessRuleException("SNAPSHOT_ROWS_INVALID", problem, List.of(problem));
+		batch.sort(Comparator.comparing(AttributeSnapshot::getUserKey));
+		return batch;
+	}
+
+	/**
+	 * A resend of a batch that landed is a no-op while its load is loading or
+	 * serving; on a failed or superseded load it would report success on data
+	 * nobody will read, so it's refused like any other append there.
+	 */
+	private static SnapshotLoad alreadyAppended(SnapshotLoad load, String key, String requestHash, String recorded) {
+		if (!recorded.equals(requestHash)) {
+			throw rejected("batchKey: " + key + " was already used for a different batch in this load");
 		}
+		if (load.getStatus() != SnapshotLoadStatus.ACTIVE) {
+			load.requireLoading();
+		}
+		return load;
+	}
+
+	private static BusinessRuleException rejected(String problem) {
+		return new BusinessRuleException("SNAPSHOT_ROWS_INVALID", problem, List.of(problem));
 	}
 
 	/** Rows appended so far, for a loader to track progress and compare before activating. */
@@ -155,6 +213,16 @@ public class AttributeSnapshotService {
 	@Transactional
 	public SnapshotLoad activate(UUID loadId, long expectedRows) {
 		SnapshotLoad load = loads.lockForActivation(loadId).orElseThrow(() -> loadNotFound(loadId));
+		if (load.getActivatedAt() != null) {
+			// activated before: a retry of a committed activation
+			load.requireRows(load.getRowCount(), expectedRows);
+			if (load.getStatus() == SnapshotLoadStatus.SUPERSEDED) {
+				// it did activate, but isn't what's serving now: don't let a retry report it as live
+				throw new BusinessRuleException("SNAPSHOT_LOAD_SUPERSEDED", "Snapshot load " + loadId
+						+ " was activated at " + load.getActivatedAt() + " and has since been replaced by a newer load");
+			}
+			return load;
+		}
 		load.requireLoading();
 		long rows = snapshots.countByLoadId(loadId);
 		load.requireRows(rows, expectedRows);
@@ -178,7 +246,11 @@ public class AttributeSnapshotService {
 
 	@Transactional
 	public SnapshotLoad fail(UUID loadId) {
-		SnapshotLoad load = getLoad(loadId);
+		// locked like activation, so overlapping retries see each other's outcome instead of a @Version conflict
+		SnapshotLoad load = loads.lockForActivation(loadId).orElseThrow(() -> loadNotFound(loadId));
+		if (load.getStatus() == SnapshotLoadStatus.FAILED) {
+			return load;
+		}
 		load.fail();
 		return loads.saveAndFlush(load);
 	}

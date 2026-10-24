@@ -172,8 +172,8 @@ public class CampaignService {
 			violations.add("optionalScript: contains characters that can't be stored");
 		}
 		// channels are a set, so there is no index to point at; the rule is the same for each
-		if (content.channels().stream().map(String::strip).anyMatch(channel -> channel.isEmpty()
-				|| channel.codePointCount(0, channel.length()) > MAX_CHANNEL_LENGTH || !StorableText.isStorable(channel))) {
+		if (content.channels().stream().map(String::strip)
+				.anyMatch(channel -> channel.isEmpty() || !StorableText.fits(channel, MAX_CHANNEL_LENGTH))) {
 			violations.add("channels: each 1-" + MAX_CHANNEL_LENGTH + " characters that can be stored");
 		}
 		if (!violations.isEmpty()) {
@@ -190,8 +190,7 @@ public class CampaignService {
 
 	private static String requireName(String name) {
 		String stripped = name == null ? "" : name.strip();
-		// code points, not UTF-16 units: varchar(200) counts characters
-		if (stripped.isEmpty() || stripped.codePointCount(0, stripped.length()) > MAX_NAME_LENGTH) {
+		if (stripped.isEmpty() || StorableText.length(stripped) > MAX_NAME_LENGTH) {
 			throw new BusinessRuleException("CAMPAIGN_NAME_INVALID",
 					"Campaign name must be 1-" + MAX_NAME_LENGTH + " characters");
 		}

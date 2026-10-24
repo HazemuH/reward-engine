@@ -13,7 +13,7 @@ The API surface the (future) Admin Panel talks to. Built and testable **without*
 | RE-064 | Customer search + redemption history (`customerRef`-based, no CIF in path/query — see `CLAUDE.md`) | TODO | M3 |
 | RE-065 | Operations endpoints — pending transactions, entitlement retry, manual resolution requests | TODO | M3, M6 |
 | RE-066 | Reports + CSV export (BOM UTF-8, CIF masked except for authorized roles, every full-CIF reveal audited; no sensitive attribute values — docs/architecture/attributes.md) `[tenant-safety-check]` | TODO | M3 |
-| RE-067 | Library endpoints — reference sets, attribute catalog, snapshot feed config | TODO | M2 |
+| RE-067 | Library endpoints — reference sets, attribute catalog, snapshot feed config; clearing an attribute's `sensitive` flag goes through checker approval (flagging stays immediate — docs/architecture/attributes.md; approver is open decision #23) | TODO | M2 |
 | RE-068 | Audit log endpoint (read-only, for the Auditor role once RBAC exists) | TODO | — |
 
 ## Exit criteria
