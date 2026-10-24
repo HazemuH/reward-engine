@@ -12,7 +12,7 @@ Conditions and scripts may only refer to attributes in the tenant's catalog, plu
 | `source` | `REQUEST` (sent by the caller with each request) or `SNAPSHOT` (loaded periodically). No live lookup source: it would put a downstream call on the calculate path |
 | `data_type` | `STRING`, `NUMBER`, `BOOLEAN`, `DATE`, `DATETIME` (dates local to `tenant.time_zone`) |
 | `sensitive` | See below |
-| `description` | Optional, at most 500 characters |
+| `description` | Optional, at most 500 characters, none the database would refuse (NUL, unpaired surrogates) |
 
 Name, source and type are fixed once defined, because stored values and approved conditions are read through them. A different meaning needs a new attribute. Only `sensitive` and `description` change (`AttributeCatalogService.describe`, under `@Version`). Attributes are never removed.
 
