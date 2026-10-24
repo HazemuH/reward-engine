@@ -2,6 +2,7 @@ package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.common.text.StorableText;
+import com.rewardengine.core.attribute.AttributeName;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,7 +44,6 @@ final class RuleDefinitionValidator {
 			.enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
 			.build();
 
-	private static final Pattern ATTRIBUTE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*");
 	// BCP 47 language[-Script][-REGION|-UN M.49 region]: en, pt-BR, zh-Hant, es-419
 	private static final Pattern LANGUAGE = Pattern.compile("[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?");
 	private static final Set<String> SECTIONS = Set.of("conditions", "benefits", "vars", "content");
@@ -135,8 +135,8 @@ final class RuleDefinitionValidator {
 			return;
 		}
 		JsonNode attr = condition.get("attr");
-		if (attr == null || !attr.isString() || !ATTRIBUTE.matcher(attr.stringValue()).matches()) {
-			violate(path + ".attr", "required; a dotted attribute name such as \"customer.segment\"");
+		if (attr == null || !attr.isString() || !AttributeName.isValid(attr.stringValue())) {
+			violate(path + ".attr", "required; " + AttributeName.RULE);
 		}
 		JsonNode opNode = condition.get("op");
 		ConditionOperator op = opNode != null && opNode.isString()

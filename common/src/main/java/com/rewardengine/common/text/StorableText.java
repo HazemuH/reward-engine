@@ -12,6 +12,16 @@ public final class StorableText {
 	private StorableText() {
 	}
 
+	/** Characters as varchar(n) counts them: code points, not UTF-16 units. */
+	public static int length(String s) {
+		return s.codePointCount(0, s.length());
+	}
+
+	/** Storable and at most {@code maxLength} characters — the usual check for a bounded text column. */
+	public static boolean fits(String s, int maxLength) {
+		return length(s) <= maxLength && isStorable(s);
+	}
+
 	public static boolean isStorable(String s) {
 		for (int i = 0; i < s.length(); i++) {
 			char c = s.charAt(i);

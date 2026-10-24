@@ -7,6 +7,13 @@ spring:
     url: ${REWARD_DB_URL}
     username: ${REWARD_DB_USERNAME}
     password: ${REWARD_DB_PASSWORD}
+    hikari:
+      data-source-properties:
+        # Keep row data out of error messages: without this the driver puts the
+        # server's DETAIL (offending key values) and a failed batch's bound
+        # parameters into exceptions Hibernate logs at ERROR — sensitive
+        # attribute values and customer keys included.
+        logServerErrorDetail: false
   jpa:
     open-in-view: false
     hibernate:
@@ -15,6 +22,15 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+          # multi-row writes (snapshot loads) go out in batches, not one round trip per row.
+          # Deliberately without order_inserts/order_updates: entities reference each other
+          # by plain UUID columns Hibernate can't see, and the campaign/counter flows rely
+          # on statements running in the order they were issued (FKs, freeze triggers).
+          batch_size: 100
+        # IN lists padded to powers of two: a batch's duplicate-key lookup reuses a
+        # handful of statements instead of one per batch size
+        query:
+          in_clause_parameter_padding: true
   flyway:
     locations: classpath:db/migration
   data:
@@ -41,6 +57,8 @@ management:
 reward:
   quote-ttl-minutes: 15
   calculate-rate-limit-per-minute: 10
+  snapshot:
+    max-string-length: 1000
 
 logging:
   level:

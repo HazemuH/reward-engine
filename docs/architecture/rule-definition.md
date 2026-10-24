@@ -12,13 +12,13 @@ Whether a version is **complete enough to approve** is checked at submit (RE-060
 - at least one `CAMPAIGN`-scoped `MONEY` or `POINT` counter, so the campaign's maximum cost is bounded;
 - discount benefits only alongside `ALL_OR_NOTHING` counters (the quoted discount must be exactly what gets debited); `PARTIAL` only for points/cashback;
 - content present in every language the tenant serves;
-- condition attributes exist in the attribute catalog (RE-012) and `ref` names an existing reference set (RE-067).
+- condition attributes exist in the attribute catalog (`AttributeCatalogService.requireDefined`, see `docs/architecture/attributes.md`) and `ref` names an existing reference set (RE-067).
 
 ## Definition (`raw_definition`)
 
 Top-level sections: `conditions`, `benefits`, `vars`, `content`. Anything else is rejected — `counters` included, because limits live in `counter_def` (one source of truth for caps).
 
-Stored in jsonb's own canonical text (Postgres is asked to produce it), so resending an unchanged definition with different spacing or key order doesn't bump `@Version`. Duplicate keys are rejected rather than silently collapsed. So is any key or string jsonb would refuse or the driver would alter — a NUL, or an unpaired surrogate (which the driver would store as `?`) — and any number past jsonb's numeric range, each reported at its path. The script and channels get the same character check (`DRAFT_CONTENT_INVALID`; channels 1–50 characters).
+Stored in jsonb's own canonical text (Postgres is asked to produce it), so resending an unchanged definition with different spacing or key order doesn't bump `@Version`. Duplicate keys are rejected rather than silently collapsed. So is any key or string jsonb would refuse or the driver would alter — a NUL, or an unpaired surrogate (which the driver would store as `?`) — and any number past jsonb's numeric range, each reported at its path. The script and channels get the same character check (`DRAFT_CONTENT_INVALID`); channels are stripped, then must be 1–50 characters.
 
 ```json
 {
@@ -46,7 +46,7 @@ Object of named parameters, read by conditions and scripts. Names: a letter, the
 
 ### `conditions`
 
-All must hold (AND). Each has `attr` (dotted name, e.g. `customer.segment`) and `op`; the operator decides the operand fields:
+All must hold (AND). Each has `attr` (dotted name, e.g. `customer.segment`, at most 100 characters; the same rule as the attribute catalog, `docs/architecture/attributes.md`) and `op`; the operator decides the operand fields:
 
 | `op` | Operand fields |
 |---|---|
@@ -59,7 +59,7 @@ An operand is a literal or `{"var": "<name>"}` naming a declared var; the var's 
 
 ### `benefits`
 
-Each type at most once, and at most one discount per version. Amounts are whole numbers from 1 to 10^15, in the same unit as the matching counters (`MONEY` amounts in the tenant's currency); the bound keeps a counter's `used + amount` inside bigint.
+Each type at most once, and at most one discount per version. Amounts are whole numbers from 1 to 10^15, written as JSON integers (`100`, not `100.0` or `1e2`), in the same unit as the matching counters (`MONEY` amounts in the tenant's currency); the bound keeps a counter's `used + amount` inside bigint.
 
 | `type` | Fields | Granted |
 |---|---|---|

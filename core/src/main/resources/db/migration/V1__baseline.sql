@@ -200,6 +200,78 @@ create table counter (
     unique (campaign_id, name, scope_key, period_key)
 );
 
+-- The attributes rules may use. Name, source and type never change once
+-- defined (stored values and approved conditions are read through them).
+-- sensitive: allowed in data conditions, never in scripts, logs or exports.
+create table attribute_def (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    name varchar(100) not null,
+    source varchar(20) not null,
+    data_type varchar(20) not null,
+    sensitive boolean not null default false,
+    description varchar(500),
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100)
+);
+
+-- Unique regardless of case: two names differing only in case invite a
+-- condition on the wrong one (one loaded, the other caller-sent).
+create unique index uq_attribute_def_name on attribute_def (tenant_id, lower(name));
+
+-- One generation of the customer attribute snapshot. Activating a load
+-- supersedes the previous one in the same transaction (the atomic swap); at
+-- most one serves reads per tenant.
+create table snapshot_load (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    status varchar(20) not null,
+    row_count bigint not null default 0 check (row_count >= 0),
+    activated_at timestamptz,
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100),
+    constraint snapshot_load_activation_recorded check (
+        status in ('LOADING', 'FAILED') or activated_at is not null)
+);
+
+create unique index uq_snapshot_load_active
+    on snapshot_load (tenant_id) where status = 'ACTIVE';
+
+-- Not history: superseded generations are purged by the loader's retention
+-- (RE-057), taking their rows with them, hence the cascade.
+create table attribute_snapshot (
+    id uuid primary key,
+    tenant_id uuid not null references tenant(id),
+    load_id uuid not null references snapshot_load(id) on delete cascade,
+    user_key varchar(200) not null,
+    attributes jsonb not null,
+    version bigint not null default 0,
+    created_at timestamptz not null,
+    created_by varchar(100),
+    updated_at timestamptz,
+    updated_by varchar(100),
+    constraint uq_attribute_snapshot_user unique (load_id, user_key)
+);
+
+-- One row per batch appended to a load: the idempotency record for append.
+-- A resent batchKey with the same request_hash is a no-op, with another hash a
+-- loader bug. Purged with its load.
+create table snapshot_batch (
+    tenant_id uuid not null references tenant(id),
+    load_id uuid not null references snapshot_load(id) on delete cascade,
+    batch_key varchar(100) not null,
+    request_hash varchar(64) not null,
+    row_count int not null check (row_count >= 0),
+    created_at timestamptz not null default now(),
+    primary key (load_id, batch_key)
+);
+
 create table redemption (
     id uuid primary key,
     tenant_id uuid not null references tenant(id),

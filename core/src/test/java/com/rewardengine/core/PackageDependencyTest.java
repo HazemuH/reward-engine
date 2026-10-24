@@ -10,7 +10,8 @@ import com.tngtech.archunit.lang.ArchRule;
 /**
  * Feature packages may depend on each other in one direction only. counter
  * depends on campaign (the consuming UPDATE checks campaign status); campaign
- * reaches counter-owned data only through interfaces it defines itself.
+ * reaches counter-owned data only through interfaces it defines itself; both
+ * may read attribute, which depends on neither.
  */
 @AnalyzeClasses(packages = "com.rewardengine.core", importOptions = ImportOption.DoNotIncludeTests.class)
 class PackageDependencyTest {
@@ -19,4 +20,11 @@ class PackageDependencyTest {
 	static final ArchRule campaignDoesNotDependOnCounter = noClasses()
 			.that().resideInAPackage("..core.campaign..")
 			.should().dependOnClassesThat().resideInAPackage("..core.counter..");
+
+	/** The catalog is a leaf: rules read it, it knows nothing about rules. */
+	@ArchTest
+	static final ArchRule attributeDependsOnNoOtherFeature = noClasses()
+			.that().resideInAPackage("..core.attribute..")
+			.should().dependOnClassesThat().resideInAnyPackage("..core.campaign..", "..core.counter..",
+					"..core.redemption..");
 }
