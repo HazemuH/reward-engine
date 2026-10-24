@@ -333,15 +333,53 @@ class CampaignServiceTest {
 	}
 
 	@Test
-	void jsonThatJsonbCannotStoreIsAValidationErrorNotADatabaseError() {
+	void textJsonbWouldRefuseOrTheDriverWouldAlterIsRejectedNotStored() {
 		UUID tenant = newTenant(tenants);
 		DraftContent nul = new DraftContent("{\"vars\": {\"x\": \"a\\u0000b\"}}", null, Set.of());
+		// a literal lone surrogate, as an outer JSON layer decodes "\\ud800": stored, it would become '?'
+		DraftContent surrogate = new DraftContent("{\"vars\": {\"x\": \"a\uD800b\"}}", null, Set.of());
 
-		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", nul)))
+		for (DraftContent content : List.of(nul, surrogate)) {
+			assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Campaign", content)))
+					.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+						assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
+						assertThat(e.getDetails()).containsExactly("vars.x: contains characters that can't be stored");
+					});
+		}
+		assertThat(TenantContext.callAs(tenant, () -> service.list(Pageable.unpaged()))).isEmpty();
+	}
+
+	@Test
+	void campaignNameTheDatabaseWouldRefuseIsRejectedWithACode() {
+		UUID tenant = newTenant(tenants);
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant, () -> service.create("Week\u0000end", V1)))
 				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
-					assertThat(e.getCode()).isEqualTo("RULE_DEFINITION_INVALID");
-					assertThat(e.getDetails()).singleElement().asString().startsWith("not storable as jsonb");
+					assertThat(e.getCode()).isEqualTo("CAMPAIGN_NAME_INVALID");
+					assertThat(e.getMessage()).contains("can't be stored");
 				});
+		assertRejected(tenant, () -> service.create("Week\uD800end", V1), "CAMPAIGN_NAME_INVALID");
+	}
+
+	@Test
+	void scriptAndChannelsGetTheSameStorableCheck() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign", V1));
+		DraftContent badScript = new DraftContent(V1.rawDefinition(), "return\u0000x", Set.of("MOBILE"));
+		DraftContent badChannels = new DraftContent(V1.rawDefinition(), null, Set.of(" ", "x".repeat(51)));
+		DraftContent surrogateChannel = new DraftContent(V1.rawDefinition(), null, Set.of("MOB\uD800"));
+
+		assertThatThrownBy(() -> TenantContext.callAs(tenant,
+				() -> service.editDraft(v1.getId(), v1.getVersion(), badScript)))
+				.isInstanceOfSatisfying(BusinessRuleException.class, e -> {
+					assertThat(e.getCode()).isEqualTo("DRAFT_CONTENT_INVALID");
+					assertThat(e.getDetails()).containsExactly("optionalScript: contains characters that can't be stored");
+				});
+		assertRejected(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), badChannels), "DRAFT_CONTENT_INVALID");
+		assertRejected(tenant, () -> service.editDraft(v1.getId(), v1.getVersion(), surrogateChannel),
+				"DRAFT_CONTENT_INVALID");
+		assertThat(TenantContext.callAs(tenant, () -> service.getVersion(v1.getId())).getVersion())
+				.isEqualTo(v1.getVersion());
 	}
 
 	@Test
@@ -392,6 +430,17 @@ class CampaignServiceTest {
 			service.claimDraft(v1);
 			return null;
 		})).isInstanceOf(IllegalTransactionStateException.class);
+	}
+
+	@Test
+	void channelsAreStrippedSoTheyMatchClientChannelsExactly() {
+		UUID tenant = newTenant(tenants);
+
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> service.create("Campaign",
+				new DraftContent(V1.rawDefinition(), null, Set.of(" MOBILE", "MOBILE ", "WEB"))));
+
+		assertThat(TenantContext.callAs(tenant, () -> service.getVersion(v1.getId())).getChannels())
+				.containsExactlyInAnyOrder("MOBILE", "WEB");
 	}
 
 	@Test

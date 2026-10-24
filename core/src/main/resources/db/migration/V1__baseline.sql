@@ -163,7 +163,8 @@ create table counter_def (
     unit varchar(20) not null,
     period varchar(20) not null,
     mode varchar(20) not null,
-    cap bigint not null check (cap >= 0),
+    -- same bounds as RuleAmount: positive, and small enough that used + amount fits bigint
+    cap bigint not null check (cap > 0 and cap <= 1000000000000000),
     sort_order int not null,
     version bigint not null default 0,
     created_at timestamptz not null,

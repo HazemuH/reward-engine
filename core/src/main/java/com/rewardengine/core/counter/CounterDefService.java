@@ -3,6 +3,7 @@ package com.rewardengine.core.counter;
 import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.core.campaign.CampaignService;
 import com.rewardengine.core.campaign.CampaignVersion;
+import com.rewardengine.core.campaign.RuleAmount;
 import com.rewardengine.core.campaign.RuleIdentifier;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -96,9 +97,10 @@ public class CounterDefService {
 				// a redemption consumes exactly 1 of a COUNT counter; there is no partial share of it
 				violations.add(path + ".mode: PARTIAL needs a MONEY or POINT unit");
 			}
-			// zero would reject every reserve; almost certainly a typo rather than a closed counter
-			if (limit.cap() <= 0) {
-				violations.add(path + ".cap: must be greater than 0");
+			// zero would reject every reserve (a typo, not a closed counter); the upper bound
+			// keeps `used + amount` inside bigint
+			if (!RuleAmount.isValid(limit.cap())) {
+				violations.add(path + ".cap: " + RuleAmount.RULE);
 			}
 		}
 		if (!violations.isEmpty()) {

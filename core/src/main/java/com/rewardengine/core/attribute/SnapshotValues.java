@@ -1,5 +1,6 @@
 package com.rewardengine.core.attribute;
 
+import com.rewardengine.common.text.StorableText;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;

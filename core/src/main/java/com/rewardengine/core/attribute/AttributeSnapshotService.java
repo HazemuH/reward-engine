@@ -1,6 +1,7 @@
 package com.rewardengine.core.attribute;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.common.text.StorableText;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;

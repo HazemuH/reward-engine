@@ -15,6 +15,7 @@ import com.rewardengine.core.campaign.CampaignVersion;
 import com.rewardengine.core.campaign.CampaignVersionRepository;
 import com.rewardengine.core.campaign.CampaignVersionStatus;
 import com.rewardengine.core.campaign.DraftContent;
+import com.rewardengine.core.campaign.RuleAmount;
 import com.rewardengine.core.tenant.TenantRepository;
 import java.util.Arrays;
 import java.util.List;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 @SpringBootTest
@@ -54,6 +56,9 @@ class CounterDefServiceTest {
 
 	@Autowired
 	CounterDefService service;
+
+	@Autowired
+	JdbcTemplate jdbc;
 
 	@Test
 	void replaceStoresLimitsInListOrderAndBumpsVersion() {
@@ -137,7 +142,9 @@ class CounterDefServiceTest {
 				new CounterLimit("quota", CounterScope.USER, CounterUnit.COUNT, CounterPeriod.DAY,
 						CounterMode.PARTIAL, 0),
 				new CounterLimit("bad name", null, null, null, null, 1),
-				null);
+				null,
+				new CounterLimit("huge", CounterScope.CAMPAIGN, CounterUnit.POINT, CounterPeriod.CAMPAIGN,
+						CounterMode.ALL_OR_NOTHING, 1_000_000_000_000_001L));
 
 		assertThatThrownBy(() -> TenantContext.callAs(tenant,
 				() -> service.replaceDraftLimits(v1.getId(), v1.getVersion(), invalid)))
@@ -146,17 +153,33 @@ class CounterDefServiceTest {
 					assertThat(e.getDetails()).containsExactly(
 							"counters[1].name: \"quota\" is used by another counter",
 							"counters[1].mode: PARTIAL needs a MONEY or POINT unit",
-							"counters[1].cap: must be greater than 0",
+							"counters[1].cap: a whole number from 1 to 1000000000000000",
 							"counters[2].name: a letter followed by letters, digits or '_' (at most 100)",
 							"counters[2].scope: required",
 							"counters[2].unit: required",
 							"counters[2].period: required",
 							"counters[2].mode: required",
-							"counters[3]: must not be null");
+							"counters[3]: must not be null",
+							"counters[4].cap: a whole number from 1 to 1000000000000000");
 				});
 		assertThat(limits(tenant, v1.getId())).isEmpty();
 		assertThat(TenantContext.callAs(tenant, () -> campaigns.getVersion(v1.getId())).getVersion())
 				.isEqualTo(v1.getVersion());
+	}
+
+	@Test
+	void serviceAndDatabaseShareTheCapBound() {
+		UUID tenant = newTenant(tenants);
+		CampaignVersion v1 = TenantContext.callAs(tenant, () -> campaigns.create("Campaign", EMPTY));
+		CounterLimit atMax = new CounterLimit("budget", CounterScope.CAMPAIGN, CounterUnit.POINT,
+				CounterPeriod.CAMPAIGN, CounterMode.ALL_OR_NOTHING, RuleAmount.MAX);
+
+		replace(tenant, v1, atMax);
+
+		// the migration's literal must stay equal to RuleAmount.MAX
+		assertThatThrownBy(() -> jdbc.update("update counter_def set cap = ? where campaign_version_id = ?",
+				RuleAmount.MAX + 1, v1.getId())).hasMessageContaining("check");
+		assertThat(limits(tenant, v1.getId())).containsExactly(atMax);
 	}
 
 	@Test

@@ -1,6 +1,7 @@
 package com.rewardengine.common.web;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Standard envelope for every admin-facing response.
@@ -15,9 +16,14 @@ public record ApiResponse<T>(boolean success, T data, ApiError error, Instant ti
 	}
 
 	public static <T> ApiResponse<T> error(String code, String message) {
-		return new ApiResponse<>(false, null, new ApiError(code, message), Instant.now());
+		return error(code, message, List.of());
 	}
 
-	public record ApiError(String code, String message) {
+	/** details: one entry per problem (BusinessRuleException#getDetails), so an editor can point at each field. */
+	public static <T> ApiResponse<T> error(String code, String message, List<String> details) {
+		return new ApiResponse<>(false, null, new ApiError(code, message, List.copyOf(details)), Instant.now());
+	}
+
+	public record ApiError(String code, String message, List<String> details) {
 	}
 }
