@@ -72,9 +72,10 @@ public class CampaignVersion extends TenantScopedEntity {
 
 	/**
 	 * The only write path for rule content, so "frozen once it leaves DRAFT" holds
-	 * no matter which service holds the entity.
+	 * no matter which service holds the entity. Package-private: content reaches
+	 * it only through CampaignService, which validates and canonicalizes it first.
 	 */
-	public void editDraft(DraftContent content) {
+	void editDraft(DraftContent content) {
 		requireDraft();
 		rawDefinition = content.rawDefinition();
 		optionalScript = content.optionalScript();

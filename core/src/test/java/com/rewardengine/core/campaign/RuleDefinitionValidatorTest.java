@@ -123,14 +123,14 @@ class RuleDefinitionValidatorTest {
 				  { "type": "CASHBACK", "amount": 99999999999999999999 }
 				] }""")).containsExactly(
 				"benefits[0].type: required; one of DISCOUNT_FIXED, DISCOUNT_PERCENT, POINT, CASHBACK",
-				"benefits[1].amount: required; a whole number greater than 0",
+				"benefits[1].amount: required; a whole number from 1 to 1000000000000000, written without a decimal point or exponent",
 				"benefits[2].type: at most one discount benefit per version",
 				"benefits[2].percent: required; a number greater than 0 and at most 100",
-				"benefits[2].max: required; a whole number greater than 0",
+				"benefits[2].max: required; a whole number from 1 to 1000000000000000, written without a decimal point or exponent",
 				"benefits[3].max: unknown field",
-				"benefits[3].amount: required; a whole number greater than 0",
+				"benefits[3].amount: required; a whole number from 1 to 1000000000000000, written without a decimal point or exponent",
 				"benefits[4].type: POINT appears more than once",
-				"benefits[5].amount: required; a whole number greater than 0");
+				"benefits[5].amount: required; a whole number from 1 to 1000000000000000, written without a decimal point or exponent");
 	}
 
 	@Test
@@ -152,6 +152,62 @@ class RuleDefinitionValidatorTest {
 				"content.fr.footer: unknown field",
 				"content.fr.title: must be non-blank text",
 				"content.fr: has fields [footer, title] but content.id has [message, title]");
+	}
+
+	@Test
+	void amountsStopWhereCounterSumsCouldOverflow() {
+		assertThat(violations("{\"benefits\": [{\"type\": \"POINT\", \"amount\": 1000000000000001}]}"))
+				.containsExactly("benefits[0].amount: required; a whole number from 1 to 1000000000000000, written without a decimal point or exponent");
+		assertThat(violations("{\"benefits\": [{\"type\": \"POINT\", \"amount\": 1000000000000000}]}")).isEmpty();
+	}
+
+	@Test
+	void textTheDatabaseWouldRefuseOrAlterIsReportedAtItsPath() {
+		// escaped NUL, a literal unpaired surrogate (the driver would store it as '?'), and a bad key
+		assertThat(violations("{\"vars\": {\"a\": \"x\\u0000y\", \"b\": \"\uD800\"}, \"content\": {\"\uDC00\": {}}}"))
+				.contains(
+						"vars.a: contains characters that can't be stored",
+						"vars.b: contains characters that can't be stored",
+						"content: has a key with characters that can't be stored");
+	}
+
+	@Test
+	void numbersPastJsonbRangeAreReportedAtTheirPath() {
+		assertThat(violations("{\"vars\": {\"huge\": 1e1000000, \"fine\": 1e100, \"zero\": 0e200000},"
+				+ " \"benefits\": [{\"type\": \"BOGUS\"}]}"))
+				// a number quotes nothing, so the other checks still run: all violations at once
+				.containsExactly("vars.huge: number is outside the range that can be stored",
+						"benefits[0].type: required; one of DISCOUNT_FIXED, DISCOUNT_PERCENT, POINT, CASHBACK");
+	}
+
+	@Test
+	void unstorableKeyIsReportedOnceAndNeverQuoted() {
+		// a literal lone surrogate key, and an escaped NUL key that Jackson decodes to a NUL
+		assertThat(violations("{\"content\": {\"\uDC00\": {}}, \"\\u0000\": 1}"))
+				.containsExactlyInAnyOrder(
+						"content: has a key with characters that can't be stored",
+						"(key): has a key with characters that can't be stored")
+				.allSatisfy(v -> assertThat(v).doesNotContain("\u0000").doesNotContain("\uDC00"));
+	}
+
+	@Test
+	void unusedOperandFieldsAreReportedInAFixedOrder() {
+		assertThat(violations("{\"conditions\": [{\"attr\": \"a\", \"op\": \"=\", \"value\": 1, \"to\": 2, \"values\": [1], \"from\": 1, \"ref\": \"r\"}]}"))
+				.containsExactly(
+						"conditions[0].ref: not used by operator \"=\"",
+						"conditions[0].values: not used by operator \"=\"",
+						"conditions[0].from: not used by operator \"=\"",
+						"conditions[0].to: not used by operator \"=\"");
+	}
+
+	@Test
+	void acceptsBcp47TagsWithScriptOrNumericRegion() {
+		assertThat(violations("""
+				{ "content": {
+				  "zh-Hant": { "title": "x" }, "es-419": { "title": "x" }, "pt-BR": { "title": "x" }, "en": { "title": "x" }
+				} }""")).isEmpty();
+		assertThat(violations("{\"content\": {\"zh-hant\": {\"title\": \"x\"}}}"))
+				.containsExactly("content.zh-hant: must be a language tag such as \"en\" or \"pt-BR\"");
 	}
 
 	@Test

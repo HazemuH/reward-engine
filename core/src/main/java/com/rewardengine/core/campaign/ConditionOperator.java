@@ -2,6 +2,7 @@ package com.rewardengine.core.campaign;
 
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Condition operators as written in a rule definition ({@code "op": ">="}).
@@ -21,9 +22,20 @@ public enum ConditionOperator {
 	BETWEEN("between", Operand.RANGE, true);
 
 	public enum Operand {
-		VALUE,
-		SET,
-		RANGE
+		VALUE(Set.of("value")),
+		SET(Set.of("values", "ref")),
+		RANGE(Set.of("from", "to"));
+
+		private final Set<String> fields;
+
+		Operand(Set<String> fields) {
+			this.fields = fields;
+		}
+
+		/** The condition fields this operand kind is written with. */
+		public Set<String> fields() {
+			return fields;
+		}
 	}
 
 	private final String symbol;

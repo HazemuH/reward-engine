@@ -1,8 +1,12 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.common.text.StorableText;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -23,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CampaignService {
 
 	private static final int MAX_NAME_LENGTH = 200;
+	private static final int MAX_CHANNEL_LENGTH = 50;
 
 	private final CampaignRepository campaigns;
 	private final CampaignVersionRepository versions;
@@ -141,8 +146,11 @@ public class CampaignService {
 	 */
 	private DraftContent validated(DraftContent content) {
 		RuleDefinitionValidator.validate(content.rawDefinition());
+		requireStorable(content);
+		// stripped like names: channels are matched exactly against client_application's
+		Set<String> channels = content.channels().stream().map(String::strip).collect(Collectors.toSet());
 		return new DraftContent(canonicalizer.canonicalize(content.rawDefinition()), content.optionalScript(),
-				content.channels());
+				channels);
 	}
 
 	private static CampaignVersion newVersion(UUID campaignId, int versionNumber, DraftContent content) {
@@ -151,6 +159,27 @@ public class CampaignService {
 		version.setVersionNumber(versionNumber);
 		version.editDraft(content);
 		return version;
+	}
+
+	/**
+	 * The script and channels are text columns too: a NUL would fail at flush with
+	 * a raw error, an unpaired surrogate would be stored as '?'. The script's own
+	 * checks are M4's (compiled at save).
+	 */
+	private static void requireStorable(DraftContent content) {
+		List<String> violations = new ArrayList<>();
+		if (content.optionalScript() != null && !StorableText.isStorable(content.optionalScript())) {
+			violations.add("optionalScript: contains characters that can't be stored");
+		}
+		// channels are a set, so there is no index to point at; the rule is the same for each
+		if (content.channels().stream().map(String::strip).anyMatch(channel -> channel.isEmpty()
+				|| channel.codePointCount(0, channel.length()) > MAX_CHANNEL_LENGTH || !StorableText.isStorable(channel))) {
+			violations.add("channels: each 1-" + MAX_CHANNEL_LENGTH + " characters that can be stored");
+		}
+		if (!violations.isEmpty()) {
+			throw new BusinessRuleException("DRAFT_CONTENT_INVALID",
+					"Draft content is invalid: " + String.join("; ", violations), violations);
+		}
 	}
 
 	private static void checkVersion(Class<?> type, UUID id, long expected, long actual) {
@@ -165,6 +194,9 @@ public class CampaignService {
 		if (stripped.isEmpty() || stripped.codePointCount(0, stripped.length()) > MAX_NAME_LENGTH) {
 			throw new BusinessRuleException("CAMPAIGN_NAME_INVALID",
 					"Campaign name must be 1-" + MAX_NAME_LENGTH + " characters");
+		}
+		if (!StorableText.isStorable(stripped)) {
+			throw new BusinessRuleException("CAMPAIGN_NAME_INVALID", "Campaign name contains characters that can't be stored");
 		}
 		return stripped;
 	}

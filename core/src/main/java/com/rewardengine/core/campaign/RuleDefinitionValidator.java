@@ -1,8 +1,10 @@
 package com.rewardengine.core.campaign;
 
 import com.rewardengine.common.error.BusinessRuleException;
+import com.rewardengine.common.text.StorableText;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -10,6 +12,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
@@ -40,13 +44,22 @@ final class RuleDefinitionValidator {
 			.build();
 
 	private static final Pattern ATTRIBUTE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*");
-	private static final Pattern LANGUAGE = Pattern.compile("[a-z]{2,3}(-[A-Z]{2})?");
+	// BCP 47 language[-Script][-REGION|-UN M.49 region]: en, pt-BR, zh-Hant, es-419
+	private static final Pattern LANGUAGE = Pattern.compile("[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?");
 	private static final Set<String> SECTIONS = Set.of("conditions", "benefits", "vars", "content");
-	private static final Set<String> CONDITION_FIELDS = Set.of("attr", "op", "value", "values", "ref", "from", "to");
+	// ordered, so violations come out in the same order on every run
+	private static final List<String> OPERAND_FIELDS = Arrays.stream(ConditionOperator.Operand.values())
+			.flatMap(operand -> operand.fields().stream().sorted())
+			.toList();
+	private static final Set<String> CONDITION_FIELDS = Stream.concat(Stream.of("attr", "op"), OPERAND_FIELDS.stream())
+			.collect(Collectors.toUnmodifiableSet());
+	private static final Map<String, BenefitType> BENEFIT_TYPES = Arrays.stream(BenefitType.values())
+			.collect(Collectors.toUnmodifiableMap(BenefitType::name, type -> type));
 	private static final Set<String> CONTENT_FIELDS = Set.of("title", "description", "terms", "message");
 	private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
 	private final List<String> violations = new ArrayList<>();
+	private boolean unstorableKey;
 	private final Map<String, JsonNode> declaredVars = new HashMap<>();
 
 	private RuleDefinitionValidator() {
@@ -70,6 +83,11 @@ final class RuleDefinitionValidator {
 		}
 		if (root == null || !root.isObject()) {
 			return List.of("must be a JSON object");
+		}
+		checkStorable(root, "");
+		if (unstorableKey) {
+			// the checks below quote keys; stop before they repeat the characters just refused
+			return violations;
 		}
 		for (Map.Entry<String, JsonNode> section : root.properties()) {
 			if (section.getKey().equals("counters")) {
@@ -128,12 +146,8 @@ final class RuleDefinitionValidator {
 			violate(path + ".op", "required; one of = != > >= < <= in not_in between");
 			return;
 		}
-		Set<String> allowed = switch (op.operand()) {
-			case VALUE -> Set.of("value");
-			case SET -> Set.of("values", "ref");
-			case RANGE -> Set.of("from", "to");
-		};
-		for (String field : List.of("value", "values", "ref", "from", "to")) {
+		Set<String> allowed = op.operand().fields();
+		for (String field : OPERAND_FIELDS) {
 			if (condition.has(field) && !allowed.contains(field)) {
 				violate(path + "." + field, "not used by operator \"" + op.symbol() + "\"");
 			}
@@ -216,7 +230,7 @@ final class RuleDefinitionValidator {
 		Set<BenefitType> seen = EnumSet.noneOf(BenefitType.class);
 		checkArray(benefits, "benefits", (benefit, path) -> {
 			JsonNode typeNode = benefit.get("type");
-			BenefitType type = typeNode != null && typeNode.isString() ? benefitType(typeNode.stringValue()) : null;
+			BenefitType type = typeNode != null && typeNode.isString() ? BENEFIT_TYPES.get(typeNode.stringValue()) : null;
 			if (type == null) {
 				violate(path + ".type", "required; one of DISCOUNT_FIXED, DISCOUNT_PERCENT, POINT, CASHBACK");
 				return;
@@ -249,10 +263,39 @@ final class RuleDefinitionValidator {
 		}
 	}
 
-	// Integers only: amounts are summed into bigint MONEY/POINT counters.
+	// Whole and bounded: amounts are summed into bigint MONEY/POINT counters.
 	private void checkPositiveInteger(JsonNode amount, String path) {
-		if (amount == null || !amount.isIntegralNumber() || !amount.canConvertToLong() || amount.longValue() <= 0) {
-			violate(path, "required; a whole number greater than 0");
+		if (amount == null || !amount.isIntegralNumber() || !amount.canConvertToLong()
+				|| !RuleAmount.isValid(amount.longValue())) {
+			// 100.0 and 1e3 are refused too: amounts are written as JSON integers
+			violate(path, "required; " + RuleAmount.RULE + ", written without a decimal point or exponent");
+		}
+	}
+
+	/**
+	 * Every key, string and number, at any depth: what jsonb would refuse or the
+	 * driver silently alter (see StorableText), or a number past jsonb's numeric
+	 * range, is reported here at its path rather than by the database.
+	 */
+	private void checkStorable(JsonNode node, String path) {
+		if (node.isString() && !StorableText.isStorable(node.stringValue())) {
+			violate(path, "contains characters that can't be stored");
+		} else if (node.isNumber() && !fitsJsonb(node.decimalValue())) {
+			violate(path, "number is outside the range that can be stored");
+		} else if (node.isArray()) {
+			for (int i = 0; i < node.size(); i++) {
+				checkStorable(node.get(i), path + "[" + i + "]");
+			}
+		} else if (node.isObject()) {
+			for (Map.Entry<String, JsonNode> field : node.properties()) {
+				String fieldPath = path.isEmpty() ? field.getKey() : path + "." + field.getKey();
+				if (!StorableText.isStorable(field.getKey())) {
+					unstorableKey = true;
+					violate(path.isEmpty() ? "(key)" : path, "has a key with characters that can't be stored");
+				} else {
+					checkStorable(field.getValue(), fieldPath);
+				}
+			}
 		}
 	}
 
@@ -317,17 +360,15 @@ final class RuleDefinitionValidator {
 		return true;
 	}
 
-	private static boolean isScalar(JsonNode node) {
-		return node.isString() || node.isNumber() || node.isBoolean();
+	// jsonb numeric: at most 131072 digits before the decimal point and 16383 after;
+	// zero fits whatever its exponent (Postgres reduces 0e200000 to 0)
+	private static boolean fitsJsonb(BigDecimal number) {
+		return number.signum() == 0
+				|| (number.precision() - number.scale() <= 131_072 && number.scale() <= 16_383);
 	}
 
-	private static BenefitType benefitType(String name) {
-		for (BenefitType type : BenefitType.values()) {
-			if (type.name().equals(name)) {
-				return type;
-			}
-		}
-		return null;
+	private static boolean isScalar(JsonNode node) {
+		return node.isString() || node.isNumber() || node.isBoolean();
 	}
 
 	private void violate(String path, String problem) {

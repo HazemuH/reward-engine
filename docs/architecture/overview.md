@@ -87,6 +87,7 @@ Admin-side codes (campaign authoring):
 | `VERSION_NOT_EDITABLE` | Version has left DRAFT; its content is frozen, changes go into a new draft |
 | `DRAFT_ALREADY_OPEN` | Campaign already has an open draft version (one at a time) |
 | `CAMPAIGN_NAME_INVALID` | Campaign name blank or longer than 200 characters |
+| `DRAFT_CONTENT_INVALID` | Script or channels hold text that can't be stored, or a channel is blank/longer than 50 characters; `details` lists each |
 | `RULE_DEFINITION_INVALID` | Rule definition breaks the schema; `details` lists every violation (`docs/architecture/rule-definition.md`) |
 | `COUNTER_LIMITS_INVALID` | A counter limit is malformed (name, missing field, `PARTIAL` on `COUNT`, cap ≤ 0); `details` lists every violation |
 
