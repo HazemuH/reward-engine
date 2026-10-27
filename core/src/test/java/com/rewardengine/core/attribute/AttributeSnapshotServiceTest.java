@@ -78,6 +78,8 @@ class AttributeSnapshotServiceTest {
 		CustomerSnapshot snapshot = TenantContext.callAs(tenant, () -> service.find("u-1")).orElseThrow();
 
 		assertThat(active.getRowCount()).isOne();
+		// the returned load holds what was stored (timestamptz keeps microseconds), on any OS clock
+		assertThat(active.getActivatedAt().getNano() % 1_000).isZero();
 		assertThat(snapshot.loadedAt()).isEqualTo(active.getActivatedAt()).isNotNull();
 		assertThat(snapshot.values()).containsOnly(
 				Map.entry("customer.segment", "GOLD"),
