@@ -3,6 +3,7 @@ package com.rewardengine.core.attribute;
 import com.rewardengine.common.error.BusinessRuleException;
 import com.rewardengine.common.text.StorableText;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -230,7 +231,9 @@ public class AttributeSnapshotService {
 			current.supersede();
 			loads.saveAndFlush(current);
 		});
-		load.activate(Instant.now(), rows);
+		// microseconds, as timestamptz stores them: the returned load must carry what a re-read
+		// would (Linux clocks give nanoseconds, so an untruncated value differs from the stored one)
+		load.activate(Instant.now().truncatedTo(ChronoUnit.MICROS), rows);
 		try {
 			return loads.saveAndFlush(load);
 		} catch (DataIntegrityViolationException e) {

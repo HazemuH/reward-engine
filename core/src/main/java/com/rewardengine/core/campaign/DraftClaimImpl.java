@@ -2,6 +2,7 @@ package com.rewardengine.core.campaign;
 
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 /**
@@ -32,7 +33,7 @@ class DraftClaimImpl implements DraftClaim {
 		int claimed = entityManager.createQuery("""
 				update CampaignVersion v set v.version = v.version + 1, v.updatedAt = :now
 				where v.id = :id and v.version = :version and v.status = :draft""")
-				.setParameter("now", Instant.now())
+				.setParameter("now", Instant.now().truncatedTo(ChronoUnit.MICROS))
 				.setParameter("id", version.getId())
 				.setParameter("version", version.getVersion())
 				.setParameter("draft", CampaignVersionStatus.DRAFT)
